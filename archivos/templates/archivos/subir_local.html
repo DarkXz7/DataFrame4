@@ -1,0 +1,69 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}Subir Archivo Local - Gestor de Archivos{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 mx-auto">
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h4 class="mb-0"><i class="bi bi-upload"></i> Subir Archivo Local</h4>
+            </div>
+            <div class="card-body">
+                <form method="post" enctype="multipart/form-data">
+                    {% csrf_token %}
+                    
+                    <!-- Información de tipos soportados -->
+                    <div class="alert alert-info">
+                        <h6><i class="bi bi-info-circle"></i> Tipos de archivo soportados:</h6>
+                        <ul class="mb-0">
+                            <li><strong>Excel:</strong> .xlsx, .xls</li>
+                            <li><strong>CSV:</strong> .csv</li>
+                            <li><strong>Texto:</strong> .txt</li>
+                        </ul>
+                    </div>
+
+                    <!-- Campo de archivo -->
+                    <div class="mb-3">
+                        <label for="{{ form.archivo.id_for_label }}" class="form-label">
+                            <strong>Seleccionar archivo:</strong>
+                        </label>
+                        {{ form.archivo }}
+                        {% if form.archivo.help_text %}
+                            <div class="form-text">{{ form.archivo.help_text }}</div>
+                        {% endif %}
+                        {% if form.archivo.errors %}
+                            <div class="text-danger">
+                                {% for error in form.archivo.errors %}
+                                    <small>{{ error }}</small>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Instrucciones -->
+                    <div class="alert alert-warning">
+                        <h6><i class="bi bi-exclamation-triangle"></i> Instrucciones:</h6>
+                        <ol class="mb-0">
+                            <li>Selecciona tu archivo usando el botón "Elegir archivo"</li>
+                            <li>Haz clic en "Subir y Procesar"</li>
+                            <li>Revisa la vista previa de los datos</li>
+                            <li>Confirma el guardado si todo está correcto</li>
+                        </ol>
+                    </div>
+
+                    <!-- Botones -->
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <a href="{% url 'index' %}" class="btn btn-secondary">
+                            <i class="bi bi-arrow-left"></i> Volver
+                        </a>
+                        <button type="submit" class="btn btn-success">
+                            <i class="bi bi-upload"></i> Subir y Procesar
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

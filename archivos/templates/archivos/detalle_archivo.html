@@ -1,0 +1,135 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}{{ archivo.nombre }} - Detalle del Archivo{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <!-- Información básica del archivo -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">
+                    <i class="bi bi-file-earmark-{% if archivo.tipo == 'excel' %}excel{% elif archivo.tipo == 'csv' %}text{% else %}text{% endif %}"></i>
+                    {{ archivo.nombre }}
+                </h4>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6><strong>Información del Archivo:</strong></h6>
+                        <ul class="list-unstyled">
+                            <li><strong>Nombre:</strong> {{ info_archivo.nombre }}</li>
+                            <li><strong>Tipo:</strong> 
+                                <span class="badge bg-{% if archivo.tipo == 'excel' %}success{% elif archivo.tipo == 'csv' %}info{% else %}warning{% endif %}">
+                                    {{ info_archivo.tipo }}
+                                </span>
+                            </li>
+                            <li><strong>Tamaño:</strong> {{ info_archivo.tamaño }}</li>
+                            <li><strong>Fecha de modificación:</strong> {{ info_archivo.fecha_modificacion|date:"d/m/Y H:i:s" }}</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6><strong>Ubicación:</strong></h6>
+                        <p><code>{{ info_archivo.ruta }}</code></p>
+                        <h6><strong>Carpeta:</strong></h6>
+                        <p>{{ archivo.carpeta.nombre }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Hojas de Excel (si aplica) -->
+        {% if archivo.tipo == 'excel' and hojas_disponibles %}
+        <div class="card mb-4">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="bi bi-layers"></i> Hojas Disponibles en Excel</h5>
+            </div>
+            <div class="card-body">
+                <p>Este archivo Excel contiene {{ hojas_disponibles|length }} hoja{{ hojas_disponibles|length|pluralize }}:</p>
+                <div class="row">
+                    {% for hoja in hojas_disponibles %}
+                    <div class="col-md-6 col-lg-4 mb-3">
+                        <div class="card border-success">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">{{ hoja }}</h6>
+                                <a href="{% url 'procesar_archivo' archivo.id %}?hoja={{ hoja|urlencode }}" class="btn btn-success btn-sm">
+                                    <i class="bi bi-play-circle"></i> Procesar esta hoja
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="alert alert-info mt-3">
+                    <i class="bi bi-info-circle"></i> 
+                    <strong>Tip:</strong> Selecciona una hoja específica o procesa el archivo completo usando la primera hoja.
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Acciones disponibles -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-gear"></i> Acciones Disponibles</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <div class="d-grid">
+                            <a href="{% url 'procesar_archivo' archivo.id %}" class="btn btn-success btn-lg">
+                                <i class="bi bi-play-circle"></i> Procesar Archivo
+                                {% if archivo.tipo == 'excel' %}
+                                    <br><small>(Primera hoja)</small>
+                                {% endif %}
+                            </a>
+                        </div>
+                    </div>
+                    {% if archivo.tipo == 'excel' and hojas_disponibles|length > 1 %}
+                    <div class="col-md-6 mb-3">
+                        <div class="d-grid">
+                            <div class="dropdown">
+                                <button class="btn btn-outline-success btn-lg dropdown-toggle w-100" type="button" id="dropdownHojas" data-bs-toggle="dropdown">
+                                    <i class="bi bi-layers"></i> Procesar Hoja Específica
+                                </button>
+                                <ul class="dropdown-menu w-100">
+                                    {% for hoja in hojas_disponibles %}
+                                    <li>
+                                        <a class="dropdown-item" href="{% url 'procesar_archivo' archivo.id %}?hoja={{ hoja|urlencode }}">
+                                            {{ hoja }}
+                                        </a>
+                                    </li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                {% if archivo.tipo == 'csv' or archivo.tipo == 'txt' %}
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle"></i>
+                    <strong>Información:</strong> 
+                    {% if archivo.tipo == 'csv' %}
+                        Este archivo CSV será procesado automáticamente detectando el separador más apropiado.
+                    {% else %}
+                        Este archivo de texto será analizado para detectar el mejor formato de lectura.
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Botones de navegación -->
+        <div class="mt-4">
+            <a href="{% url 'listar_archivos' archivo.carpeta.id %}" class="btn btn-secondary">
+                <i class="bi bi-arrow-left"></i> Volver a Lista de Archivos
+            </a>
+            <a href="{% url 'listar_carpetas_compartidas' %}" class="btn btn-outline-secondary ms-2">
+                <i class="bi bi-folder-symlink"></i> Ver Carpetas
+            </a>
+             </div>
+    </div>
+</div>
+{% endblock %}

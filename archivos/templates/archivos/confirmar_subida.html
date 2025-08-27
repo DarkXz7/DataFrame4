@@ -1,0 +1,171 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}Confirmar Subida a {{ carpeta.nombre }} - Gestor de Archivos{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h4 class="mb-0">
+                    <i class="bi bi-check-circle"></i> Confirmar Archivos para Subir
+                </h4>
+                <small>Destino: {{ carpeta.nombre }} ({{ carpeta.ruta }})</small>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <h6><i class="bi bi-info-circle"></i> Revisa y Confirma:</h6>
+                    <p class="mb-0">Selecciona qué archivos quieres subir a la carpeta compartida. Para archivos Excel, puedes elegir hojas específicas.</p>
+                </div>
+
+                <form method="post" id="form-confirmar">
+                    {% csrf_token %}
+                    
+                    {% for archivo in archivos %}
+                        <div class="card mb-4 archivo-preview">
+                            <div class="card-header">
+                                <div class="form-check">
+                                    <input class="form-check-input archivo-checkbox" type="checkbox" 
+                                           value="archivo_{{ forloop.counter0 }}" 
+                                           id="archivo_{{ forloop.counter0 }}"
+                                           name="archivo_seleccionado" checked>
+                                    <label class="form-check-label" for="archivo_{{ forloop.counter0 }}">
+                                        <i class="bi bi-{% if archivo.tipo == 'excel' %}file-earmark-excel text-success{% elif archivo.tipo == 'csv' %}file-earmark-text text-info{% else %}file-earmark text-warning{% endif %}"></i>
+                                        <strong>{{ archivo.nombre }}</strong>
+                                        <span class="badge bg-{% if archivo.tipo == 'excel' %}success{% elif archivo.tipo == 'csv' %}info{% else %}warning{% endif %} ms-2">
+                                            {{ archivo.tipo|upper }}
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="card-body archivo-content">
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <h6>Información del archivo:</h6>
+                                        <ul class="list-unstyled small">
+                                            <li><strong>Tamaño:</strong> {{ archivo.tamaño|filesizeformat }}</li>
+                                            <li><strong>Filas:</strong> {{ archivo.filas }}</li>
+                                            <li><strong>Columnas:</strong> {{ archivo.columnas }}</li>
+                                        </ul>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <h6>Columnas detectadas:</h6>
+                                        <div class="d-flex flex-wrap gap-1">
+                                            {% for columna in archivo.columnas_nombres %}
+                                                <span class="badge bg-light text-dark border">{{ columna }}</span>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Hojas de Excel -->
+                                {% if archivo.tipo == 'excel' and archivo.hojas %}
+                                    <div class="mb-3">
+                                        <h6>Hojas disponibles en Excel:</h6>
+                                        <div class="form-text mb-2">Selecciona las hojas que quieres subir como archivos separados (o ninguna para subir el archivo completo):</div>
+                                        <div class="row">
+                                            {% for hoja in archivo.hojas %}
+                                                <div class="col-md-4 mb-2">
+                                                    <div class="form-check">
+                                                        <input class="form-check-input" type="checkbox" 
+                                                               value="{{ hoja }}" 
+                                                               id="hoja_{{ forloop.parentloop.counter0 }}_{{ forloop.counter0 }}"
+                                                               name="hojas_{{ forloop.parentloop.counter0 }}">
+                                                        <label class="form-check-label" for="hoja_{{ forloop.parentloop.counter0 }}_{{ forloop.counter0 }}">
+                                                            <i class="bi bi-file-earmark-excel"></i> {{ hoja }}
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                {% endif %}
+
+                                <!-- Preview de datos -->
+                                <div class="mb-3">
+                                    <h6>Preview de datos (primeras 10 filas):</h6>
+                                    <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+                                        {{ archivo.preview_html|safe }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    {% endfor %}
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-between">
+                        <div>
+                            <button type="button" class="btn btn-outline-secondary" onclick="toggleTodos()">
+                                <i class="bi bi-check-all"></i> Seleccionar/Deseleccionar Todo
+                            </button>
+                            <span id="contador-seleccionados" class="ms-3 text-muted">
+                                <!-- Se actualiza con JavaScript -->
+                            </span>
+                        </div>
+                        <div>
+                            <a href="{% url 'seleccionar_archivos' carpeta.id %}" class="btn btn-outline-warning me-2">
+                                <i class="bi bi-arrow-left"></i> Volver
+                            </a>
+                            <button type="submit" class="btn btn-success" id="btn-confirmar">
+                                <i class="bi bi-cloud-upload"></i> Subir Archivos Seleccionados
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const checkboxes = document.querySelectorAll('.archivo-checkbox');
+    const contadorSeleccionados = document.getElementById('contador-seleccionados');
+    const btnConfirmar = document.getElementById('btn-confirmar');
+
+    function actualizarContador() {
+        const seleccionados = document.querySelectorAll('.archivo-checkbox:checked').length;
+        contadorSeleccionados.textContent = `${seleccionados} archivo(s) seleccionado(s)`;
+        btnConfirmar.disabled = seleccionados === 0;
+        
+        // Mostrar/ocultar contenido según selección
+        checkboxes.forEach(function(checkbox) {
+            const archivoContent = checkbox.closest('.archivo-preview').querySelector('.archivo-content');
+            if (checkbox.checked) {
+                archivoContent.style.display = 'block';
+            } else {
+                archivoContent.style.display = 'none';
+            }
+        });
+    }
+
+    checkboxes.forEach(function(checkbox) {
+        checkbox.addEventListener('change', actualizarContador);
+    });
+
+    window.toggleTodos = function() {
+        const todosSeleccionados = Array.from(checkboxes).every(cb => cb.checked);
+        checkboxes.forEach(function(checkbox) {
+            checkbox.checked = !todosSeleccionados;
+        });
+        actualizarContador();
+    };
+
+    // Inicializar contador
+    actualizarContador();
+});
+</script>
+
+<style>
+.archivo-preview {
+    border-left: 4px solid #dee2e6;
+}
+
+.archivo-preview .form-check-input:checked ~ .form-check-label {
+    font-weight: bold;
+}
+
+.table-responsive table {
+    font-size: 0.85em;
+}
+</style>
+{% endblock %}

@@ -1,0 +1,128 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}Elegir Método - Gestor de Archivos{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12 text-center mb-4">
+        <h1><i class="bi bi-question-circle"></i> ¿Cómo quieres trabajar?</h1>
+        <p class="lead">Elige el método que mejor se adapte a tus necesidades</p>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <div class="row">
+            <!-- Opción 1: Archivo Local -->
+            <div class="col-md-6 mb-4">
+                <div class="card h-100 text-center card-hover border-success">
+                    <div class="card-header bg-success text-white">
+                        <h4><i class="bi bi-upload"></i> Archivo Local</h4>
+                    </div>
+                    <div class="card-body">
+                        <h5 class="card-title">Subir desde tu computadora</h5>
+                        <p class="card-text">Ideal para archivos que tienes guardados en tu PC</p>
+                        
+                        <div class="text-start">
+                            <h6><strong>Ventajas:</strong></h6>
+                            <ul>
+                                <li>Fácil y rápido</li>
+                                <li>Control total del archivo</li>
+                                <li>Vista previa antes de guardar</li>
+                                <li>Procesamiento inmediato</li>
+                            </ul>
+                            
+                            <h6><strong>¿Cuándo usarlo?</strong></h6>
+                            <ul>
+                                <li>Archivos en tu computadora</li>
+                                <li>Trabajo individual</li>
+                                <li>Análisis rápido</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="card-footer">
+                        <a href="{% url 'subir_archivo_local' %}" class="btn btn-success btn-lg w-100">
+                            <i class="bi bi-upload"></i> Elegir este método
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Opción 2: Carpeta Compartida -->
+            <div class="col-md-6 mb-4">
+                <div class="card h-100 text-center card-hover border-info">
+                    <div class="card-header bg-info text-white">
+                        <h4><i class="bi bi-folder-symlink"></i> Carpeta Compartida</h4>
+                    </div>
+                    <div class="card-body">
+                        <h5 class="card-title">Acceder a archivos de red</h5>
+                        <p class="card-text">Perfecto para trabajar con archivos compartidos en la red</p>
+                        
+                        <div class="text-start">
+                            <h6><strong>Ventajas:</strong></h6>
+                            <ul>
+                                <li>Acceso desde múltiples PCs</li>
+                                <li>No ocupa espacio local</li>
+                                <li>Archivos siempre actualizados</li>
+                                <li>Trabajo colaborativo</li>
+                            </ul>
+                            
+                            <h6><strong>¿Cuándo usarlo?</strong></h6>
+                            <ul>
+                                <li>Archivos en servidores</li>
+                                <li>Trabajo en equipo</li>
+                                <li>Carpetas compartidas</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="card-footer">
+                        <a href="{% url 'listar_carpetas_compartidas' %}" class="btn btn-info btn-lg w-100">
+                            <i class="bi bi-folder-symlink"></i> Elegir este método
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Información adicional -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-light">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> Información Adicional</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6><strong>Tipos de archivo soportados:</strong></h6>
+                        <ul>
+                            <li><i class="bi bi-file-earmark-excel text-success"></i> Excel (.xlsx, .xls)</li>
+                            <li><i class="bi bi-file-earmark-text text-info"></i> CSV (.csv)</li>
+                            <li><i class="bi bi-file-earmark-text text-warning"></i> Texto (.txt)</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6><strong>¿Necesitas ayuda?</strong></h6>
+                        <p>Si no estás seguro de qué método usar:</p>
+                        <ul>
+                            <li>Para archivos en tu PC → <strong>Archivo Local</strong></li>
+                            <li>Para archivos en la red → <strong>Carpeta Compartida</strong></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Botón de regreso -->
+<div class="row mt-4">
+    <div class="col-12 text-center">
+        <a href="{% url 'index' %}" class="btn btn-secondary">
+            <i class="bi bi-arrow-left"></i> Volver al Inicio
+        </a>
+    </div>
+</div>
+{% endblock %}

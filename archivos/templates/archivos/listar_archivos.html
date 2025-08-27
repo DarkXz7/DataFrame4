@@ -1,0 +1,174 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}Archivos en {{ carpeta.nombre }} - Gestor de Archivos{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <!-- Encabezado -->
+        <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+                <div class="row align-items-center">
+                    <div class="col">
+                        <h4 class="mb-0">
+                            <i class="bi bi-folder-open"></i> {{ carpeta.nombre }}
+                        </h4>
+                        <small>{{ carpeta.ruta }}</small>
+                    </div>
+                    <div class="col-auto">
+                        <button onclick="location.reload()" class="btn btn-light btn-sm">
+                            <i class="bi bi-arrow-clockwise"></i> Actualizar
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-8">
+                        <p class="mb-1"><strong>Descripción:</strong> {{ carpeta.descripcion }}</p>
+                        <p class="mb-0">
+                            <strong>Estado:</strong> 
+                            {% if carpeta_accesible %}
+                                <span class="badge bg-success">Accesible</span>
+                            {% else %}
+                                <span class="badge bg-danger">No accesible</span>
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div class="col-md-4 text-end">
+                        <h6>Estadísticas:</h6>
+                        <p class="mb-1"><strong>Total archivos:</strong> <span class="badge bg-primary">{{ total_archivos }}</span></p>
+                        {% for tipo, cantidad in tipos_archivo.items %}
+                            <span class="badge bg-{% if tipo == 'excel' %}success{% elif tipo == 'csv' %}info{% else %}warning{% endif %} me-1">
+                                {{ tipo|upper }}: {{ cantidad }}
+                            </span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Lista de archivos -->
+        {% if archivos %}
+            <div class="row">
+                {% for archivo in archivos %}
+                    <div class="col-md-6 col-lg-4 mb-3">
+                        <div class="card h-100 archivo-card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <div>
+                                    <i class="bi bi-{% if archivo.tipo == 'excel' %}file-earmark-excel{% elif archivo.tipo == 'csv' %}file-earmark-text{% else %}file-earmark{% endif %} text-{% if archivo.tipo == 'excel' %}success{% elif archivo.tipo == 'csv' %}info{% else %}warning{% endif %}"></i>
+                                    <small class="text-muted">{{ archivo.tipo|upper }}</small>
+                                </div>
+                                <span class="badge bg-{% if archivo.tipo == 'excel' %}success{% elif archivo.tipo == 'csv' %}info{% else %}warning{% endif %}">
+                                    {{ archivo.get_tipo_display }}
+                                </span>
+                            </div>
+                            <div class="card-body">
+                                <h6 class="card-title" title="{{ archivo.nombre }}">
+                                    {{ archivo.nombre|truncatechars:30 }}
+                                </h6>
+                                <div class="small text-muted">
+                                    <p class="mb-1">
+                                        <i class="bi bi-hdd"></i> 
+                                        {% if archivo.tamaño < 1024 %}
+                                            {{ archivo.tamaño }} bytes
+                                        {% elif archivo.tamaño < 1048576 %}
+                                            {{ archivo.tamaño|floatformat:1|add:" KB" }}
+                                        {% else %}
+                                            {{ archivo.tamaño|floatformat:1|add:" MB" }}
+                                        {% endif %}
+                                    </p>
+                                    <p class="mb-1">
+                                        <i class="bi bi-calendar"></i> 
+                                        {{ archivo.fecha_modificacion|date:"d/m/Y H:i" }}
+                                    </p>
+                                    <p class="mb-0">
+                                        <i class="bi bi-search"></i> 
+                                        Detectado: {{ archivo.fecha_deteccion|date:"d/m/Y H:i" }}
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="card-footer">
+                                <div class="d-grid gap-2">
+                                    <a href="{% url 'detalle_archivo' archivo.id %}" class="btn btn-outline-primary btn-sm">
+                                        <i class="bi bi-eye"></i> Ver Detalles
+                                    </a>
+                                    <a href="{% url 'procesar_archivo' archivo.id %}" class="btn btn-success btn-sm">
+                                        <i class="bi bi-play-circle"></i> Procesar Archivo
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="text-center py-5">
+                <i class="bi bi-inbox display-1 text-muted"></i>
+                <h4 class="text-muted mt-3">No se encontraron archivos</h4>
+                <p class="text-muted">
+                    {% if carpeta_accesible %}
+                        Agrega archivos Excel, CSV o TXT a la carpeta:<br>
+                        <code>{{ carpeta.ruta }}</code>
+                    {% else %}
+                        La carpeta no es accesible. Verifica la ruta y permisos.
+                    {% endif %}
+                </p>
+                <button onclick="location.reload()" class="btn btn-primary">
+                    <i class="bi bi-arrow-clockwise"></i> Buscar Archivos
+                </button>
+            </div>
+        {% endif %}
+
+        <!-- Acciones -->
+        <div class="card mt-4">
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <a href="{% url 'listar_carpetas_compartidas' %}" class="btn btn-outline-secondary w-100">
+                            <i class="bi bi-arrow-left"></i> Volver a Carpetas
+                        </a>
+                    </div>
+                    <div class="col-md-3">
+                        <a href="{% url 'seleccionar_archivos' carpeta.id %}" class="btn btn-primary w-100">
+                            <i class="bi bi-files"></i> Seleccionar Archivos
+                        </a>
+                    </div>
+                    <div class="col-md-3">
+                        <button onclick="location.reload()" class="btn btn-outline-info w-100">
+                            <i class="bi bi-arrow-clockwise"></i> Actualizar Lista
+                        </button>
+                    </div>
+                    <div class="col-md-3">
+                        <a href="{% url 'gestionar_carpetas' %}" class="btn btn-outline-warning w-100">
+                            <i class="bi bi-gear"></i> Gestionar Carpetas
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.archivo-card {
+    transition: transform 0.2s;
+}
+
+.archivo-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+</style>
+
+<script>
+// Auto-actualizar cada 30 segundos
+setInterval(function() {
+    // Solo si la página está visible
+    if (!document.hidden) {
+        console.log('Buscando nuevos archivos...');
+        // Podrías implementar una actualización AJAX aquí
+    }
+}, 30000);
+</script>
+{% endblock %}

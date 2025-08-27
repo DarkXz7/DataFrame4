@@ -1,0 +1,47 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}¡Éxito! - Gestor de Archivos{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 mx-auto">
+        <div class="card border-success">
+            <div class="card-header bg-success text-white text-center">
+                <h3 class="mb-0">
+                    <i class="bi bi-check-circle-fill display-4"></i>
+                </h3>
+                <h4 class="mt-2">¡Archivo Guardado Exitosamente!</h4>
+            </div>
+            <div class="card-body text-center">
+                <h5 class="card-title">{{ mensaje }}</h5>
+                
+                {% if archivo %}
+                <div class="alert alert-light">
+                    <h6><strong>Detalles del archivo:</strong></h6>
+                    <p><strong>Nombre:</strong> {{ archivo.nombre }}</p>
+                    <p><strong>Tipo:</strong> 
+                        <span class="badge bg-{% if archivo.tipo == 'Excel' %}success{% elif archivo.tipo == 'CSV' %}info{% else %}warning{% endif %}">
+                            {{ archivo.tipo }}
+                        </span>
+                    </p>
+                    <p><strong>Filas procesadas:</strong> {{ archivo.filas }}</p>
+                    <p><strong>Fecha de carga:</strong> {{ archivo.fecha_carga|date:"d/m/Y H:i:s" }}</p>
+                </div>
+                {% endif %}
+
+                <div class="d-grid gap-2 d-md-flex justify-content-md-center mt-4">
+                    <a href="{% url 'subir_archivo_local' %}" class="btn btn-success btn-lg">
+                        <i class="bi bi-upload"></i> Subir Otro Archivo
+                    </a>
+                    <a href="{% url 'archivos_guardados' %}" class="btn btn-outline-primary btn-lg">
+                        <i class="bi bi-list"></i> Ver Archivos Guardados
+                    </a>
+                    <a href="{% url 'index' %}" class="btn btn-outline-secondary btn-lg">
+                        <i class="bi bi-house"></i> Ir al Inicio
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

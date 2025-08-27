@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="es">  
+<head>    
+    <title>Vista Previa - {{ nombre }}</title>    
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .messages { margin: 20px 0; }
+        .alert { padding: 15px; margin-bottom: 20px; border: 1px solid transparent; border-radius: 4px; }
+        .alert-success { color: #155724; background-color: #d4edda; border-color: #c3e6cb; }
+        .alert-error { color: #721c24; background-color: #f8d7da; border-color: #f5c6cb; }
+        .table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+        .table th, .table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        .table th { background-color: #f2f2f2; font-weight: bold; }
+        .table-striped tbody tr:nth-child(even) { background-color: #f9f9f9; }
+        .btn { 
+            padding: 12px 20px; 
+            margin: 10px 5px; 
+            border: none; 
+            cursor: pointer; 
+            text-decoration: none;
+            display: inline-block;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .btn-success { background-color: #28a745; color: white; }
+        .btn-secondary { background-color: #6c757d; color: white; }
+        .btn:hover { opacity: 0.8; }
+        .info { 
+            margin: 20px 0; 
+            padding: 15px; 
+            background-color: #e9ecef; 
+            border-radius: 5px; 
+            border-left: 4px solid #007bff;
+        }
+        h1 { color: #333; }
+        h2 { color: #555; margin-top: 30px; }
+    </style>
+</head>  
+<body>    
+
+<h1>📋 Vista Previa del Archivo: {{ nombre }}</h1>
+
+<!-- Mostrar mensajes -->
+{% if messages %}
+    <div class="messages">
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }}">
+                {{ message }}
+            </div>
+        {% endfor %}
+    </div>
+{% endif %}
+
+<div class="info">
+    <p><strong>📊 Filas:</strong> {{ filas }}</p>
+    <p><strong>📈 Columnas:</strong> {{ columnas }}</p>
+    <p><strong>ℹ️ Revisa los datos antes de guardar</strong></p>
+</div>
+
+<h2>Datos del archivo:</h2>
+{{ df|safe }}
+
+<div style="margin-top: 30px; text-align: center;">
+    <form method="post" action="{% url 'guardar_archivo' %}" style="display: inline;">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-success">💾 Guardar Archivo</button>
+    </form>
+    
+    <a href="{% url 'subir_archivo' %}" class="btn btn-secondary">🔄 Subir Otro Archivo</a>
+</div>
+
+</body>  
+</html>

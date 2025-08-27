@@ -1,0 +1,38 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}Subida Exitosa - Gestor{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-success text-white text-center">
+                <h3 class="mb-0">
+                    <i class="bi bi-check-circle"></i> ¡Subida Exitosa!
+                </h3>
+            </div>
+            <div class="card-body text-center">
+                <div class="alert alert-success">
+                    <h5><i class="bi bi-check-circle"></i> Archivos subidos correctamente</h5>
+                    <p class="mb-0">Tus archivos han sido guardados en: <strong>{{ carpeta }}</strong></p>
+                </div>
+
+                <h6>Archivos subidos:</h6>
+                <ul class="list-group">
+                    {% for archivo in archivos %}
+                        <li class="list-group-item">
+                            <i class="bi bi-file-earmark-check text-success"></i> {{ archivo }}
+                        </li>
+                    {% endfor %}
+                </ul>
+
+                <div class="mt-4">
+                    <a href="{% url 'subir_publico' %}" class="btn btn-primary">
+                        <i class="bi bi-arrow-repeat"></i> Subir más archivos
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

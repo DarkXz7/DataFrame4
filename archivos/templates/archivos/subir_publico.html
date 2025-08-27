@@ -1,0 +1,56 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}Subir Archivos - Gestor{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-success text-white text-center">
+                <h3 class="mb-0">
+                    <i class="bi bi-cloud-upload"></i> Subir tus Archivos
+                </h3>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <h6><i class="bi bi-info-circle"></i> Información:</h6>
+                    <ul class="mb-0">
+                        <li>Destino: <strong>{{ carpeta.nombre }}</strong></li>
+                        <li>Formatos: Excel (.xlsx, .xls), CSV, TXT</li>
+                        <li>Tamaño máximo: 10MB por archivo</li>
+                        <li>Múltiples archivos: Sí</li>
+                    </ul>
+                </div>
+
+                <form method="post" enctype="multipart/form-data">
+                    
+                    
+                    <div class="mb-3">
+                        <label for="{{ form.archivo.id_for_label }}" class="form-label">
+                            <i class="bi bi-file-earmark-arrow-up"></i> {{ form.archivo.label }}
+                        </label>
+                        {{ form.archivo }}
+                        <div class="form-text">{{ form.archivo.help_text }}</div>
+                        {% if form.archivo.errors %}
+                            <div class="text-danger">
+                                {% for error in form.archivo.errors %}
+                                    <div>{{ error }}</div>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-success btn-lg">
+                            <i class="bi bi-cloud-upload"></i> Subir Archivos
+                        </button>
+                    </div>
+                </form>
+            </div>
+            <div class="card-footer text-center text-muted">
+                <small>Los archivos se guardarán automáticamente</small>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

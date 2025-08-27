@@ -1,0 +1,29 @@
+# Framework principal
+Django>=4.2,<5.0  
+
+# Manejo de datos y limpieza
+pandas>=2.0.0  
+
+# Lectura y escritura de archivos Excel
+openpyxl>=3.1.0  
+
+# Soporte para archivos Excel antiguos
+xlrd>=2.0.1  
+
+# Manejo de archivos CSV grandes de forma eficiente
+chardet>=5.0.0  
+
+# Manejo de rutas y archivos del sistema
+pathlib2>=2.3.7  
+
+# Manejo de entornos
+python-decouple>=3.8  
+
+# Extensiones útiles para Django
+django-extensions>=3.2.3
+
+# Para el manejo de archivos TXT con diferentes codificaciones
+python-magic>=0.4.27  # Para detectar tipos de archivo
+
+# Utilidades adicionales
+humanize>=4.7.0  # Para mostrar tamaños de archivo de forma legible

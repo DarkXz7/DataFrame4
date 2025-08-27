@@ -1,0 +1,148 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}Subir Archivo a {{ carpeta.nombre }} - Gestor de Archivos{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">
+                    <i class="bi bi-cloud-upload"></i> Subir Archivo a {{ carpeta.nombre }}
+                </h4>
+            </div>
+            <div class="card-body">
+                <!-- Información de la carpeta -->
+                <div class="alert alert-info">
+                    <h6><i class="bi bi-info-circle"></i> Destino:</h6>
+                    <p class="mb-1"><strong>Carpeta:</strong> {{ carpeta.nombre }}</p>
+                    <p class="mb-0"><strong>Ruta:</strong> <code>{{ carpeta.ruta }}</code></p>
+                </div>
+
+                <!-- Formulario de subida -->
+                <form method="post" enctype="multipart/form-data" id="form-subir">
+                    {% csrf_token %}
+                    
+                    <div class="mb-3">
+                        <label for="{{ form.archivo.id_for_label }}" class="form-label">
+                            <i class="bi bi-file-earmark-arrow-up"></i> {{ form.archivo.label }}
+                        </label>
+                        {{ form.archivo }}
+                        {% if form.archivo.help_text %}
+                            <div class="form-text">{{ form.archivo.help_text }}</div>
+                        {% endif %}
+                        {% if form.archivo.errors %}
+                            <div class="text-danger">
+                                {% for error in form.archivo.errors %}
+                                    <small>{{ error }}</small>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Información del archivo seleccionado -->
+                    <div id="info-archivo" class="alert alert-light" style="display: none;">
+                        <h6><i class="bi bi-file-text"></i> Archivo seleccionado:</h6>
+                        <p class="mb-1"><strong>Nombre:</strong> <span id="nombre-archivo"></span></p>
+                        <p class="mb-1"><strong>Tamaño:</strong> <span id="tamano-archivo"></span></p>
+                        <p class="mb-0"><strong>Tipo:</strong> <span id="tipo-archivo"></span></p>
+                    </div>
+
+                    <!-- Botones -->
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <a href="{% url 'listar_archivos' carpeta.id %}" class="btn btn-outline-secondary me-md-2">
+                            <i class="bi bi-arrow-left"></i> Cancelar
+                        </a>
+                        <button type="submit" class="btn btn-success" id="btn-subir" disabled>
+                            <i class="bi bi-cloud-upload"></i> Subir Archivo
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Instrucciones -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-lightbulb"></i> Instrucciones</h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Archivos soportados:</h6>
+                        <ul class="list-unstyled">
+                            <li><i class="bi bi-file-earmark-excel text-success"></i> Excel (.xlsx, .xls)</li>
+                            <li><i class="bi bi-file-earmark-text text-info"></i> CSV (.csv)</li>
+                            <li><i class="bi bi-file-earmark text-warning"></i> Texto (.txt)</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Límites:</h6>
+                        <ul class="list-unstyled">
+                            <li><i class="bi bi-hdd"></i> Tamaño máximo: 10MB</li>
+                            <li><i class="bi bi-shield-check"></i> Solo archivos seguros</li>
+                            <li><i class="bi bi-clock"></i> Procesamiento automático</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const inputArchivo = document.getElementById('{{ form.archivo.id_for_label }}');
+    const infoArchivo = document.getElementById('info-archivo');
+    const nombreArchivo = document.getElementById('nombre-archivo');
+    const tamanoArchivo = document.getElementById('tamano-archivo');
+    const tipoArchivo = document.getElementById('tipo-archivo');
+    const btnSubir = document.getElementById('btn-subir');
+
+    inputArchivo.addEventListener('change', function(e) {
+        const archivo = e.target.files[0];
+        
+        if (archivo) {
+            // Mostrar información del archivo
+            nombreArchivo.textContent = archivo.name;
+            tamanoArchivo.textContent = formatBytes(archivo.size);
+            tipoArchivo.textContent = archivo.type || 'Desconocido';
+            
+            infoArchivo.style.display = 'block';
+            btnSubir.disabled = false;
+            
+            // Validar tamaño
+            if (archivo.size > 10 * 1024 * 1024) {
+                alert('El archivo es demasiado grande. Máximo 10MB.');
+                inputArchivo.value = '';
+                infoArchivo.style.display = 'none';
+                btnSubir.disabled = true;
+            }
+        } else {
+            infoArchivo.style.display = 'none';
+            btnSubir.disabled = true;
+        }
+    });
+
+    // Prevenir envío sin archivo
+    document.getElementById('form-subir').addEventListener('submit', function(e) {
+        if (!inputArchivo.files[0]) {
+            e.preventDefault();
+            alert('Por favor selecciona un archivo');
+        } else {
+            btnSubir.innerHTML = '<i class="bi bi-arrow-repeat"></i> Subiendo...';
+            btnSubir.disabled = true;
+        }
+    });
+});
+
+function formatBytes(bytes, decimals = 2) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+</script>
+{% endblock %}

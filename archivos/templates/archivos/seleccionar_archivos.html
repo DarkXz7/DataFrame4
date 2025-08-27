@@ -1,0 +1,57 @@
+{% extends 'archivos/base.html' %}
+
+{% block title %}Seleccionar Archivos para {{ carpeta.nombre }} - Gestor de Archivos{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-10">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">
+                    <i class="bi bi-files"></i> Seleccionar Archivos para Subir
+                </h4>
+                <small>Destino: {{ carpeta.nombre }} ({{ carpeta.ruta }})</small>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <h6><i class="bi bi-info-circle"></i> Proceso de Subida:</h6>
+                    <ol class="mb-0">
+                        <li><strong>Selecciona archivos</strong> desde tu PC</li>
+                        <li><strong>Previsualiza</strong> el contenido y elige qué subir</li>
+                        <li><strong>Para Excel:</strong> Selecciona hojas específicas si quieres</li>
+                        <li><strong>Confirma</strong> y sube a la carpeta compartida</li>
+                    </ol>
+                </div>
+
+                <form method="post" enctype="multipart/form-data" id="form-seleccionar">
+                    {% csrf_token %}
+                    
+                    <div class="mb-4">
+                        <label for="{{ form.archivo.id_for_label }}" class="form-label">
+                            <i class="bi bi-file-earmark-arrow-up"></i> {{ form.archivo.label }}
+                        </label>
+                        {{ form.archivo }}
+                        <div class="form-text">{{ form.archivo.help_text }}</div>
+                        {% if form.archivo.errors %}
+                            <div class="text-danger">
+                                {% for error in form.archivo.errors %}
+                                    <small>{{ error }}</small>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                        <a href="{% url 'listar_archivos' carpeta.id %}" class="btn btn-outline-secondary me-md-2">
+                            <i class="bi bi-arrow-left"></i> Cancelar
+                        </a>
+                        <button type="submit" class="btn btn-success" id="btn-procesar">
+                            <i class="bi bi-eye"></i> Previsualizar Archivos
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
