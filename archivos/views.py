@@ -40,7 +40,7 @@ def seleccionar_archivos_para_subir(request, carpeta_id):
             for archivo in archivos_subidos:
                 try:
                     # Procesar según tipo
-                    archivo.seek(0)  # Asegurar que estamos al inicio
+                    archivo.seek(0)  
                     
                     if archivo.name.lower().endswith(('.xlsx', '.xls')):
                         # Para Excel, obtener las hojas
@@ -113,7 +113,7 @@ def seleccionar_archivos_para_subir(request, carpeta_id):
                     # Limpiar datos
                     if df is not None:
                         df = df.dropna(how='all').reset_index(drop=True)
-                        
+                        df = df.fillna('No Existe')
                         # Convertir archivo a base64 para sesión
                         archivo.seek(0)
                         archivo_bytes = archivo.read()
@@ -381,6 +381,8 @@ def subir_archivo_a_carpeta(request, carpeta_id):
 def index(request):
     """Vista principal que permite elegir entre subir archivo local o acceder a carpetas compartidas"""
     
+    carpetas_activas = CarpetaCompartida.objects.filter(activa=True)
+    
     # Contar carpetas compartidas disponibles
     carpetas_disponibles = CarpetaCompartida.objects.filter(activa=True).count()
     
@@ -389,7 +391,8 @@ def index(request):
     
     context = {
         'carpetas_disponibles': carpetas_disponibles,
-        'archivos_recientes': archivos_recientes
+        'archivos_recientes': archivos_recientes,
+        'carpetas_activas': carpetas_activas
     }
     
     return render(request, 'archivos/index.html', context)
@@ -449,6 +452,7 @@ def subir_archivo_local(request):
                 if df is not None and not df.empty:
                     df = df.dropna(how='all')  # Eliminar filas vacías
                     df = df.reset_index(drop=True)
+                    df = df.fillna('No Existe')
                     
                     if df.empty:
                         messages.error(request, "El archivo no contiene datos válidos")
@@ -503,9 +507,41 @@ def guardar_archivo_local(request):
                 filas=archivo_temp['filas']
             )
             
+            
+            # === Guardar archivo físico en carpeta compartida ===
+            import pandas as pd
+            from io import StringIO
+            import os
+
+            # Obtener carpeta compartida activa
+            carpeta = CarpetaCompartida.objects.filter(ruta=r'C:\CarpetaCompartida').first()
+            if not carpeta:
+                messages.error(request, "No se encontró la carpeta compartida C:\\CarpetaCompartida.")
+                return redirect('subir_archivo_local')
+
+            if not os.path.exists(carpeta.ruta):
+                os.makedirs(carpeta.ruta, exist_ok=True)
+
+            ruta_destino = os.path.join(carpeta.ruta, archivo_temp['nombre'])
+
+            # Reconstruir DataFrame y guardar según tipo de archivo
+            df = pd.DataFrame(archivo_datos)
+            df = df.fillna('')
+            if archivo_temp['tipo'].lower() == 'excel':
+                df.to_excel(ruta_destino, index=False)
+            elif archivo_temp['tipo'].lower() == 'csv':
+                df.to_csv(ruta_destino, index=False)
+            elif archivo_temp['tipo'].lower() == 'txt':
+                # Guardar como texto plano (tabulado)
+                df.to_csv(ruta_destino, index=False, sep='\t')
+            else:
+                # Por defecto, guardar como CSV
+                df.to_csv(ruta_destino, index=False)
+            
             # Limpiar sesión
             del request.session['archivo_temporal']
             del request.session['archivo_datos']
+            
             
             messages.success(request, f"¡Archivo '{archivo_temp['nombre']}' guardado exitosamente!")
             return render(request, "archivos/exito.html", {
@@ -532,7 +568,8 @@ def listar_carpetas_compartidas(request):
     return render(request, 'archivos/listar_carpetas.html', {
         'carpetas': carpetas
     })
-
+    
+#Gestionar carpetas compartidas 
 def gestionar_carpetas(request):
     """Vista para gestionar carpetas compartidas"""
     if request.method == 'POST':
@@ -549,6 +586,15 @@ def gestionar_carpetas(request):
         'form': form,
         'carpetas': carpetas
     })
+    
+    
+def eliminar_carpeta(request, carpeta_id):
+    carpeta = get_object_or_404(CarpetaCompartida, id=carpeta_id)
+    if request.method == 'POST':
+        carpeta.delete()
+        messages.success(request, f'Carpeta "{carpeta.nombre}" eliminada correctamente.')
+        return redirect('index')
+    return render(request, 'archivos/confirmar_eliminar_carpeta.html', {'carpeta': carpeta})
 
 def listar_archivos(request, carpeta_id):
     """Lista archivos en una carpeta compartida - VERSIÓN SIMPLE"""
@@ -645,6 +691,9 @@ def procesar_archivo_vista(request, archivo_id):
     try:
         # Procesar el archivo
         df, info_procesamiento = procesar_archivo(archivo, hoja_seleccionada)
+        
+        if df is not None:
+            df = df.fillna('')
         
         if df is None or df.empty:
             messages.error(request, 'El archivo no contiene datos válidos o está vacío')

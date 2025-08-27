@@ -6,11 +6,15 @@ urlpatterns = [
     path('', views.index, name='index'),
     path('elegir-metodo/', views.elegir_metodo, name='elegir_metodo'),
     
+    
+    #administrador de carpetas compartidas
+     path('carpetas/eliminar/<int:carpeta_id>/', views.eliminar_carpeta, name='eliminar_carpeta'),
+     
     # Archivos locales
     path('subir-local/', views.subir_archivo_local, name='subir_archivo_local'),
     path('guardar-local/', views.guardar_archivo_local, name='guardar_archivo_local'),
     path('archivos-guardados/', views.ver_archivos_guardados, name='archivos_guardados'),
-    
+    path('seleccionar-archivos/<int:carpeta_id>/', views.seleccionar_archivos_para_subir, name='seleccionar_archivos_para_subir'),
     # Carpetas compartidas
     path('carpetas/', views.listar_carpetas_compartidas, name='listar_carpetas_compartidas'),
     path('carpetas/gestionar/', views.gestionar_carpetas, name='gestionar_carpetas'),

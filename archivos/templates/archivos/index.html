@@ -29,9 +29,11 @@
                 </ul>
             </div>
             <div class="card-footer">
-                <a href="{% url 'subir_archivo_local' %}" class="btn btn-success btn-lg w-100">
-                    <i class="bi bi-upload"></i> Subir Archivo Local
+                {% for carpeta in carpetas_activas %}
+                <a href="{% url 'seleccionar_archivos_para_subir' carpeta_id=carpeta.id %}" class="btn btn-success btn-lg w-100 mb-2">
+                    <i class="bi bi-upload"></i> Subir a {{ carpeta.nombre }}
                 </a>
+            {% endfor %}
             </div>
         </div>
     </div>

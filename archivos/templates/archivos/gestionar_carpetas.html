@@ -104,7 +104,42 @@
                                             <i class="bi bi-files"></i> Ver Archivos
                                         </a>
                                     </td>
+                                    <td>
+                                    <button type="button"
+                                        class="btn btn-danger btn-sm"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#modalEliminarCarpeta{{ carpeta.id }}">
+                                    <i class="bi bi-trash"></i> Eliminar
+                                </button>
+                                    </td> 
                                 </tr>
+
+                                <!-- Modal de confirmación para eliminar carpeta -->
+                                 <div class="modal fade" id="modalEliminarCarpeta{{ carpeta.id }}" tabindex="-1" aria-labelledby="modalEliminarCarpetaLabel{{ carpeta.id }}" aria-hidden="true">
+                                    <div class="modal-dialog modal-dialog-centered">
+                                        <div class="modal-content">
+                                        <div class="modal-header bg-danger text-white">
+                                            <h5 class="modal-title" id="modalEliminarCarpetaLabel{{ carpeta.id }}">
+                                            <i class="bi bi-exclamation-triangle"></i> Confirmar eliminación
+                                            </h5>
+                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <p>¿Estás seguro de que deseas eliminar la carpeta <strong>{{ carpeta.nombre }}</strong>?</p>
+                                            <p class="mb-0 text-muted"><small>Esta acción no se puede deshacer.</small></p>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <form action="{% url 'eliminar_carpeta' carpeta.id %}" method="post" class="d-inline">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn btn-danger">
+                                                <i class="bi bi-trash"></i> Sí, eliminar
+                                            </button>
+                                            </form>
+                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                                        </div>
+                                        </div>
+                                    </div>
+                                    </div>
                                 {% endfor %}
                             </tbody>
                         </table>
