@@ -65,3 +65,17 @@ class SubirArchivoForm(forms.Form):
                 raise forms.ValidationError(f'Archivo {archivo.name}: Demasiado grande. Máximo 10MB.')
         
         return archivos
+    
+    
+    
+class SQLUploadForm(forms.Form):
+    MOTOR_CHOICES = [
+        ('mysql', 'MySQL'),
+        ('mariadb', 'MariaDB'),
+    ]
+    motor = forms.ChoiceField(choices=MOTOR_CHOICES, label="Motor de base de datos")
+    usuario = forms.CharField(label="Usuario")
+    password = forms.CharField(label="Contraseña", widget=forms.PasswordInput)
+    host = forms.CharField(label="Host", initial="localhost")
+    puerto = forms.IntegerField(label="Puerto", initial=3306)
+    archivo_sql = forms.FileField(label="Archivo .sql")

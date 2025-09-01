@@ -28,6 +28,14 @@ urlpatterns = [
     path('api/archivo-procesado/<int:procesado_id>/datos/', views.obtener_datos_archivo, name='obtener_datos_archivo'),
     path('carpetas/<int:carpeta_id>/seleccionar/', views.seleccionar_archivos_para_subir, name='seleccionar_archivos'),
     path('confirmar-subida/', views.confirmar_archivos_subir, name='confirmar_archivos_subir'),
+    
+    # Elegir para subir desde archivos de Bases de datos
+    path('subir-sql/', views.subir_sql, name='subir_sql'),
+    path('subir-desde-postgres/', views.subir_desde_postgres, name='subir_desde_postgres'),
+    path('subir-desde-mysql/', views.subir_desde_mysql, name='subir_desde_mysql'),
+    path("seleccionar_tablas/", views.seleccionar_tablas, name="seleccionar_tablas"),
+    path('subir-desde-postgres/', views.subir_desde_postgres, name='subir_desde_postgres'),
+    path('subir-desde-sqlserver/', views.subir_desde_sqlserver, name='subir_desde_sqlserver'),
     # URLs de compatibilidad
     path('subir/', views.subir_archivo, name='subir_archivo'),
     path('guardar/', views.guardar_archivo, name='guardar_archivo'),

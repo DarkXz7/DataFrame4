@@ -1,0 +1,17 @@
+{% extends 'archivos/base.html' %}
+{% block title %}Subir archivo SQL{% endblock %}
+{% block content %}
+<div class="container mt-4">
+    <h3>Subir archivo .sql para importar tablas</h3>
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="mb-3">
+            <label for="archivo_sql" class="form-label">Archivo .sql</label>
+            <input type="file" name="archivo_sql" id="archivo_sql" class="form-control" accept=".sql" required>
+        </div>
+        <button type="submit" class="btn btn-success">
+            <i class="bi bi-upload"></i> Subir y analizar
+        </button>
+    </form>
+</div>
+{% endblock %}

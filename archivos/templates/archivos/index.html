@@ -4,6 +4,13 @@
 
 {% block content %}
 <div class="row">
+    {% if messages %}
+  {% for message in messages %}
+    <div class="alert alert-{{ message.tags }} mt-3">
+      {{ message }}
+    </div>
+  {% endfor %}
+{% endif %}
     <div class="col-12">
         <div class="jumbotron bg-primary text-white p-5 rounded mb-4">
             <h1 class="display-4">¡Bienvenido al Gestor de Archivos!</h1>
@@ -25,7 +32,7 @@
                     <li><i class="bi bi-check-circle text-success"></i> Subir Excel (.xlsx, .xls)</li>
                     <li><i class="bi bi-check-circle text-success"></i> Subir CSV (.csv)</li>
                     <li><i class="bi bi-check-circle text-success"></i> Subir archivos de texto (.txt)</li>
-                    <li><i class="bi bi-check-circle text-success"></i> Vista previa antes de guardar</li>
+                    
                 </ul>
             </div>
             <div class="card-footer">
@@ -67,6 +74,27 @@
     </div>
 </div>
 
+<!-- -->
+<div class="col-md-12 mb-4">
+    <div class="card h-100 card-hover">
+        <div class="card-body text-center">
+            <i class="bi bi-database display-1 text-primary mb-3"></i>
+            <h3 class="card-title">Subir desde Base de Datos</h3>
+            <p class="card-text">Conecta y sube datos directamente desde tu base de datos.</p>
+            <div class="d-grid gap-2">
+                <a href="{% url 'subir_desde_mysql' %}" class="btn btn-outline-primary btn-lg">
+                    <i class="bi bi-database-fill"></i> MySQL
+                </a>
+                <a href="{% url 'subir_desde_postgres' %}" class="btn btn-outline-info btn-lg">
+                    <i class="bi bi-database-fill"></i> PostgreSQL
+                </a>
+                <a href="{% url 'subir_desde_sqlserver' %}" class="btn btn-outline-secondary btn-lg">
+                    <i class="bi bi-database-fill"></i> SQL Server
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
 <!-- Archivos Recientes -->
 {% if archivos_recientes %}
 <div class="row mt-4">

@@ -15,11 +15,17 @@ from .forms import SubirArchivoForm, CarpetaCompartidaForm
 from .models import ArchivoCargado, CarpetaCompartida, ArchivoDetectado, ArchivoProcesado
 from .utils import detectar_archivos_en_carpeta, leer_hojas_excel, procesar_archivo
 from django.views.decorators.csrf import csrf_exempt 
-
-
-
+from django import forms
+from sqlalchemy import create_engine, text
+from .forms import SQLUploadForm
+from django import template
+register = template.Library()
 
 # ...existing code... (mantener todas las importaciones y otras funciones)
+
+@register.filter
+def dict_get(d, key):
+    return d.get(key, [])
 
 def seleccionar_archivos_para_subir(request, carpeta_id):
     """Permite seleccionar archivos locales y decidir cuáles subir"""
@@ -379,23 +385,44 @@ def subir_archivo_a_carpeta(request, carpeta_id):
 
 # Vista principal - Página de inicio con opciones
 def index(request):
-    """Vista principal que permite elegir entre subir archivo local o acceder a carpetas compartidas"""
-    
+    """
+    Vista principal que permite elegir entre subir archivo local o acceder a carpetas compartidas.
+    Además, limpia la sesión para evitar que queden datos o archivos previos cargados.
+    """
+
+    # Limpiar claves de sesión relacionadas con la conexión y archivos
+    for key in [
+        'engine_url',
+        'tablas',
+        'tablas_seleccionadas',
+        'columnas',
+        'columnas_elegidas',
+        'archivo_temporal',
+        'archivo_datos',
+        'archivos_para_subir',
+        'carpeta_destino_id',
+    ]:
+        if key in request.session:
+            del request.session[key]
+
+    # Obtener carpetas activas
     carpetas_activas = CarpetaCompartida.objects.filter(activa=True)
-    
+
     # Contar carpetas compartidas disponibles
     carpetas_disponibles = CarpetaCompartida.objects.filter(activa=True).count()
-    
+
     # Contar archivos recientes subidos
     archivos_recientes = ArchivoCargado.objects.all().order_by('-fecha_carga')[:5]
-    
+
     context = {
         'carpetas_disponibles': carpetas_disponibles,
         'archivos_recientes': archivos_recientes,
         'carpetas_activas': carpetas_activas
     }
-    
+
     return render(request, 'archivos/index.html', context)
+
+
 
 # Vista para elegir método de trabajo
 def elegir_metodo(request):
@@ -723,7 +750,7 @@ def procesar_archivo_vista(request, archivo_id):
             'hoja_seleccionada': hoja_seleccionada,
             'mostrando_filas': min(50, len(df)),
             'total_filas': len(df),
-            'columnas_lista': columnas_lista,  # ← Nueva variable
+            'columnas_lista': columnas_lista,  
         })
         
     except Exception as e:
@@ -781,3 +808,278 @@ def subir_archivo(request):
 def guardar_archivo(request):
     """Redirecciona a la nueva vista de guardar archivo local"""
     return redirect('guardar_archivo_local')
+
+
+
+
+# SECCION SUBIR A BASE DE DATOS
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+
+from django.shortcuts import redirect
+
+def subir_desde_mysql(request):
+    
+    
+    
+    if request.method == 'POST':
+        form = ConexionMySQLForm(request.POST)
+        if form.is_valid():
+            host = form.cleaned_data['host']
+            puerto = form.cleaned_data['puerto']
+            usuario = form.cleaned_data['usuario']
+            password = form.cleaned_data['password']
+            base = form.cleaned_data['base']
+
+            engine_url = f"mysql+pymysql://{usuario}:{password}@{host}:{puerto}/{base}"
+            try:
+                engine = create_engine(engine_url)
+                with engine.connect() as conn:
+                    conn.execute(text("SELECT 1"))
+
+                # Guardar conexión en sesión
+                request.session['engine_url'] = engine_url  
+
+                # Redirigir a la vista de seleccionar tablas
+                return redirect('seleccionar_tablas')  
+
+            except SQLAlchemyError as e:
+                messages.error(request, f"Error de conexión: {str(e)}")
+    else:
+        form = ConexionMySQLForm()
+    
+    return render(request, 'archivos/subir_desde_mysql.html', {'form': form})
+
+
+
+
+
+
+# Formularios simples para conexión con bd
+class ConexionMySQLForm(forms.Form):
+    host = forms.CharField(label="Host", initial="localhost")
+    puerto = forms.IntegerField(label="Puerto", initial=3306)
+    usuario = forms.CharField(label="Usuario")
+    password = forms.CharField(label="Contraseña", widget=forms.PasswordInput)
+    base = forms.CharField(label="Base de datos")
+
+class ConexionPostgresForm(forms.Form):
+    host = forms.CharField(label="Host", initial="localhost")
+    puerto = forms.IntegerField(label="Puerto", initial=5432)
+    usuario = forms.CharField(label="Usuario")
+    password = forms.CharField(label="Contraseña", widget=forms.PasswordInput)
+    base = forms.CharField(label="Base de datos")
+
+class ConexionSQLServerForm(forms.Form):
+    host = forms.CharField(label="Host", initial="localhost")
+    puerto = forms.IntegerField(label="Puerto", initial=1433)
+    usuario = forms.CharField(label="Usuario")
+    password = forms.CharField(label="Contraseña", widget=forms.PasswordInput)
+    base = forms.CharField(label="Base de datos")
+
+def subir_desde_mysql(request):
+    if request.method == 'POST':
+        form = ConexionMySQLForm(request.POST)
+        if form.is_valid():
+            host = form.cleaned_data['host']
+            puerto = form.cleaned_data['puerto']
+            usuario = form.cleaned_data['usuario']
+            password = form.cleaned_data['password']
+            base = form.cleaned_data['base']
+
+            engine_url = f"mysql+pymysql://{usuario}:{password}@{host}:{puerto}/{base}"
+            try:
+                engine = create_engine(engine_url)
+                with engine.connect() as conn:
+                    conn.execute(text("SELECT 1"))
+
+                # Guardar en sesión
+                request.session['engine_url'] = engine_url  
+
+                # 🔴 AQUÍ la clave: en vez de render, haz redirect
+                return redirect('seleccionar_tablas')  
+
+            except SQLAlchemyError as e:
+                messages.error(request, f"Error de conexión: {str(e)}")
+    else:
+        form = ConexionMySQLForm()
+
+    # Esto solo se muestra si aún no hay POST o hubo error
+    return render(request, 'archivos/subir_desde_mysql.html', {'form': form})
+
+# views.py
+
+
+def limpiar_valor(valor):
+    # Ejemplo: "15 días" -> 15, convertir valores a enteros si es posible
+    if isinstance(valor, str) and valor.strip().endswith("días"):
+        return int(valor.split()[0])
+    return valor
+
+
+
+
+def subir_desde_postgres(request):
+    # Puedes implementar la lógica real después
+    from django import forms
+    class DummyForm(forms.Form):
+        pass
+    form = DummyForm()
+    return render(request, 'archivos/subir_desde_postgres.html', {'form': form})
+
+def subir_desde_sqlserver(request):
+    from django import forms
+    class DummyForm(forms.Form):
+        pass
+    form = DummyForm()
+    return render(request, 'archivos/subir_desde_sqlserver.html', {'form': form})
+
+def subir_sql(request):
+    engine_url = request.session.get('engine_url')
+    if not engine_url:
+        return redirect('subir_desde_mysql')
+
+    engine = create_engine(engine_url)
+
+    if request.method == 'POST':
+        archivo_sql = request.FILES.get('archivo_sql')
+        if archivo_sql:
+            # Limpia la sesión antes de procesar el nuevo archivo
+            for key in ['tablas', 'tablas_seleccionadas', 'columnas', 'columnas_elegidas']:
+                if key in request.session:
+                    del request.session[key]
+
+            import tempfile, subprocess
+            from sqlalchemy.engine.url import make_url
+            sql_texto = preparar_sql_para_reemplazo(archivo_sql)
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.sql', mode='w', encoding='utf-8') as tmp:
+                tmp.write(sql_texto)
+                tmp_path = tmp.name
+
+            url = make_url(engine_url)
+            mysql_cmd = [
+                r"C:\xampp\mysql\bin\mysql.exe",
+                f"-u{url.username}",
+                f"-p{url.password}",
+                f"-h{url.host}",
+                f"-P{url.port or 3306}",
+                url.database
+            ]
+            try:
+                with open(tmp_path, 'rb') as sqlfile:
+                    result = subprocess.run(
+                        mysql_cmd,
+                        stdin=sqlfile,
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode != 0:
+                        messages.error(request, f"Error MySQL: {result.stderr}")
+                        return redirect('subir_sql')
+
+                tablas = pd.read_sql("SHOW TABLES", engine).iloc[:, 0].tolist()
+                request.session['tablas'] = tablas
+                messages.success(request, "Archivo .sql importado correctamente.")
+                return redirect('seleccionar_tablas')
+
+            except Exception as e:
+                messages.error(request, f"Error al importar el archivo SQL: {str(e)}")
+                return redirect('subir_sql')
+
+    return render(request, "archivos/subir_sql.html")
+
+
+# seleccion de columnas y tablas a elegir para subir
+def seleccionar_tablas(request):
+    engine_url = request.session.get('engine_url')
+    if not engine_url:
+        return redirect('subir_desde_mysql')
+
+    tablas = request.session.get('tablas')
+    if not tablas:
+        return redirect('subir_sql')
+
+    # Obtener columnas de cada tabla
+    columnas_por_tabla = {}
+    engine = create_engine(engine_url)
+    for tabla in tablas:
+        df = pd.read_sql(f"SELECT * FROM `{tabla}` LIMIT 1", engine)
+        columnas_por_tabla[tabla] = list(df.columns)
+
+    if request.method == 'POST':
+        tablas_seleccionadas = request.POST.getlist('tablas')
+        if tablas_seleccionadas:
+            request.session['tablas_seleccionadas'] = tablas_seleccionadas
+            messages.success(request, "Tablas seleccionadas correctamente.")
+            return redirect('seleccionar_columnas')
+    tablas_columnas = [(tabla, columnas_por_tabla[tabla]) for tabla in tablas]
+
+    return render(request, "archivos/seleccionar_tablas.html", {
+    "tablas_columnas": tablas_columnas,
+})
+
+
+
+def preparar_sql_para_reemplazo(archivo_sql):
+    contenido = archivo_sql.read().decode("utf-8")
+    lineas = contenido.splitlines()
+    nuevo_sql = []
+    for linea in lineas:
+        if linea.strip().upper().startswith("CREATE TABLE"):
+            # Extraer el nombre de la tabla
+            partes = linea.strip().split()
+            if len(partes) >= 3:
+                nombre = partes[2].strip('`').strip()
+                nuevo_sql.append(f"DROP TABLE IF EXISTS {nombre};")
+        nuevo_sql.append(linea)
+    return "\n".join(nuevo_sql)
+
+
+
+
+def seleccionar_columnas(request):
+    engine_url = request.session.get('engine_url')
+    tablas_seleccionadas = request.session.get('tablas_seleccionadas', [])
+    columnas = {}
+    filas_info = {}
+
+    engine = create_engine(engine_url)
+    # Obtener columnas y número de filas de cada tabla seleccionada
+    for tabla in tablas_seleccionadas:
+        df = pd.read_sql(f"SELECT * FROM `{tabla}`", engine)
+        columnas[tabla] = list(df.columns)
+        filas_info[tabla] = len(df)
+
+    if request.method == 'POST':
+        for tabla in tablas_seleccionadas:
+            columnas_tabla = request.POST.getlist(f'columnas_{tabla}')
+            fila_inicio = int(request.POST.get(f'fila_inicio_{tabla}', 0))
+            fila_fin = int(request.POST.get(f'fila_fin_{tabla}', filas_info[tabla]))
+
+            if not columnas_tabla:
+                continue
+
+            # Leer solo las columnas y filas seleccionadas
+            df = pd.read_sql(
+                f"SELECT {', '.join([f'`{col}`' for col in columnas_tabla])} FROM `{tabla}`",
+                engine
+            )
+            df = df.iloc[fila_inicio:fila_fin]  # Selección de filas
+
+            # Preprocesamiento
+            df = df.rename(columns={col: col.strip().replace(" ", "_").lower() for col in df.columns})
+            for col in df.columns:
+                df[col] = df[col].apply(limpiar_valor)
+            df.to_sql(tabla, engine, if_exists='replace', index=False)
+
+        messages.success(request, "¡Datos subidos y tablas reemplazadas correctamente!")
+        for key in ['tablas', 'tablas_seleccionadas', 'columnas', 'columnas_elegidas']:
+            if key in request.session:
+                del request.session[key]
+        return redirect('index')
+    
+    return render(
+        request,
+        "archivos/seleccionar_columnas.html",
+        {"columnas": columnas, "tablas": tablas_seleccionadas, "filas_info": filas_info}
+    )

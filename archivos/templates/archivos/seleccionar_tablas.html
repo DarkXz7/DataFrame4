@@ -1,0 +1,40 @@
+{% extends 'archivos/base.html' %}
+{% load dict_extras %}
+
+{% block title %}Seleccionar Tablas y Columnas{% endblock %}
+{% block content %}
+<div class="container mt-4">
+    <h3>Selecciona las tablas y columnas a importar</h3>
+    <form method="post">
+        {% csrf_token %}
+        {% for tabla, columnas in tablas_columnas %}
+            <div class="card mb-3 shadow-sm">
+                <div class="card-body">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" name="tablas" value="{{ tabla }}" id="tabla_{{ tabla }}" checked>
+                        <label class="form-check-label fw-bold" for="tabla_{{ tabla }}">
+                            {{ tabla }}
+                        </label>
+                    </div>
+                    <div class="ms-4">
+                        <strong>Columnas:</strong>
+                        <div>
+                            {% for col in columnas %}
+                                <div class="form-check mb-1">
+                                    <input class="form-check-input" type="checkbox" name="columnas_{{ tabla }}" value="{{ col }}" id="col_{{ tabla }}_{{ col }}" checked>
+                                    <label class="form-check-label" for="col_{{ tabla }}_{{ col }}">
+                                        {{ col }}
+                                    </label>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+        <button type="submit" class="btn btn-success">
+            <i class="bi bi-check"></i> Confirmar selección
+        </button>
+    </form>
+</div>
+{% endblock %}
