@@ -18,22 +18,7 @@ Además, soporta **carpetas compartidas** para que varios usuarios puedan ver y 
 
 ---
 
-## 📂 Estructura del módulo
 
-
-archivos/
-├── models.py                # Modelos: Carpetas, archivos detectados, procesados y cargados
-├── views.py                 # Lógica principal: subir, procesar, conectar a MySQL, importar SQL
-├── urls.py                  # Rutas del módulo
-├── custom_filters.py        # Filtros personalizados para plantillas
-├── dict_extras.py           # Filtros para diccionarios
-├── templates/
-│   └── archivos/
-│       ├── subir_desde_mysql.html
-│       ├── subir_sql.html
-│       ├── seleccionar_tablas.html
-│       └── ... (otras plantillas de archivos locales y carpetas)
-└── uploads/                 # Carpeta donde se guardan los archivos procesados
 
 ## ⚙️ Flujo de trabajo
 
