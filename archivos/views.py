@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import os
+import re
 import json
 import humanize
 import base64
@@ -19,8 +20,11 @@ from django import forms
 from sqlalchemy import create_engine, text
 from .forms import SQLUploadForm
 from django import template
-register = template.Library()
+from sqlalchemy import text
+from django.conf import settings
+from django.views.decorators.http import require_GET
 
+register = template.Library()
 # ...existing code... (mantener todas las importaciones y otras funciones)
 
 @register.filter
@@ -818,37 +822,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from django.shortcuts import redirect
 
-def subir_desde_mysql(request):
-    
-    
-    
-    if request.method == 'POST':
-        form = ConexionMySQLForm(request.POST)
-        if form.is_valid():
-            host = form.cleaned_data['host']
-            puerto = form.cleaned_data['puerto']
-            usuario = form.cleaned_data['usuario']
-            password = form.cleaned_data['password']
-            base = form.cleaned_data['base']
 
-            engine_url = f"mysql+pymysql://{usuario}:{password}@{host}:{puerto}/{base}"
-            try:
-                engine = create_engine(engine_url)
-                with engine.connect() as conn:
-                    conn.execute(text("SELECT 1"))
 
-                # Guardar conexión en sesión
-                request.session['engine_url'] = engine_url  
-
-                # Redirigir a la vista de seleccionar tablas
-                return redirect('seleccionar_tablas')  
-
-            except SQLAlchemyError as e:
-                messages.error(request, f"Error de conexión: {str(e)}")
-    else:
-        form = ConexionMySQLForm()
-    
-    return render(request, 'archivos/subir_desde_mysql.html', {'form': form})
 
 
 
@@ -877,6 +852,7 @@ class ConexionSQLServerForm(forms.Form):
     password = forms.CharField(label="Contraseña", widget=forms.PasswordInput)
     base = forms.CharField(label="Base de datos")
 
+
 def subir_desde_mysql(request):
     if request.method == 'POST':
         form = ConexionMySQLForm(request.POST)
@@ -892,23 +868,14 @@ def subir_desde_mysql(request):
                 engine = create_engine(engine_url)
                 with engine.connect() as conn:
                     conn.execute(text("SELECT 1"))
-
-                # Guardar en sesión
-                request.session['engine_url'] = engine_url  
-
-                # 🔴 AQUÍ la clave: en vez de render, haz redirect
-                return redirect('seleccionar_tablas')  
-
+                request.session['engine_url'] = engine_url
+                # antes: return redirect('seleccionar_tablas')
+                return redirect('seleccionar_datos')
             except SQLAlchemyError as e:
                 messages.error(request, f"Error de conexión: {str(e)}")
     else:
         form = ConexionMySQLForm()
-
-    # Esto solo se muestra si aún no hay POST o hubo error
     return render(request, 'archivos/subir_desde_mysql.html', {'form': form})
-
-# views.py
-
 
 def limpiar_valor(valor):
     # Ejemplo: "15 días" -> 15, convertir valores a enteros si es posible
@@ -934,28 +901,25 @@ def subir_desde_sqlserver(request):
     form = DummyForm()
     return render(request, 'archivos/subir_desde_sqlserver.html', {'form': form})
 
+
+# ...existing code...
 def subir_sql(request):
     engine_url = request.session.get('engine_url')
     if not engine_url:
         return redirect('subir_desde_mysql')
-
     engine = create_engine(engine_url)
-
     if request.method == 'POST':
         archivo_sql = request.FILES.get('archivo_sql')
         if archivo_sql:
-            # Limpia la sesión antes de procesar el nuevo archivo
             for key in ['tablas', 'tablas_seleccionadas', 'columnas', 'columnas_elegidas']:
                 if key in request.session:
                     del request.session[key]
-
             import tempfile, subprocess
             from sqlalchemy.engine.url import make_url
             sql_texto = preparar_sql_para_reemplazo(archivo_sql)
             with tempfile.NamedTemporaryFile(delete=False, suffix='.sql', mode='w', encoding='utf-8') as tmp:
                 tmp.write(sql_texto)
                 tmp_path = tmp.name
-
             url = make_url(engine_url)
             mysql_cmd = [
                 r"C:\xampp\mysql\bin\mysql.exe",
@@ -976,110 +940,324 @@ def subir_sql(request):
                     if result.returncode != 0:
                         messages.error(request, f"Error MySQL: {result.stderr}")
                         return redirect('subir_sql')
-
                 tablas = pd.read_sql("SHOW TABLES", engine).iloc[:, 0].tolist()
-                request.session['tablas'] = tablas
+                request.session['created_tables'] = tablas
+                request.session['source_type'] = 'sql'
+                request.session['wizard_step'] = 2
                 messages.success(request, "Archivo .sql importado correctamente.")
-                return redirect('seleccionar_tablas')
-
+                # antes: redirect('seleccionar_tablas')
+                return redirect('seleccionar_datos')
             except Exception as e:
                 messages.error(request, f"Error al importar el archivo SQL: {str(e)}")
                 return redirect('subir_sql')
-
     return render(request, "archivos/subir_sql.html")
 
 
-# seleccion de columnas y tablas a elegir para subir
-def seleccionar_tablas(request):
+
+
+
+
+
+
+
+def tabla_existe(engine, tabla):
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(f"SHOW TABLES LIKE '{tabla}'"))
+            return result.first() is not None
+    except Exception:
+        return False
+    
+
+
+
+
+
+from django.views.decorators.http import require_GET
+
+@require_GET
+def preview_tabla(request):
+    """
+    Devuelve (JSON) columnas y primeras filas de una tabla/hoja seleccionada (paso 2 dinámico).
+    Parámetros:
+      ?tabla=nombre
+    Usa la sesión (source_type, temp_file, engine_url).
+    """
+    from django.http import JsonResponse
+    tabla = request.GET.get('tabla')
+    if not tabla:
+        return JsonResponse({'ok': False, 'error': 'Tabla requerida'})
+    engine_url = request.session.get('engine_url')
+    source_type = request.session.get('source_type')
+    temp_file = request.session.get('temp_file')
+    created_tables = request.session.get('created_tables', [])
+    excel_sheets = request.session.get('excel_sheets', [])
+
+    if not source_type:
+        return JsonResponse({'ok': False, 'error': 'Fuente no inicializada'})
+
+    import pandas as pd
+    sample_rows = 25
+    cols = []
+    data = []
+
+    try:
+        if source_type == 'excel':
+            if tabla not in excel_sheets:
+                return JsonResponse({'ok': False, 'error': 'Hoja inválida'})
+            df = pd.read_excel(temp_file, sheet_name=tabla, nrows=sample_rows, dtype=object)
+        elif source_type == 'csv':
+            if tabla != 'csv_table':
+                return JsonResponse({'ok': False, 'error': 'Tabla CSV inválida'})
+            df = pd.read_csv(temp_file, nrows=sample_rows, dtype=object)
+        elif source_type == 'sql':
+            if not engine_url:
+                return JsonResponse({'ok': False, 'error': 'Sin conexión'})
+            engine = create_engine(engine_url)
+            # Sanitizar nombre sencillo (evitar backticks peligrosos)
+            safe = re.sub(r'[^A-Za-z0-9_]', '', tabla)
+            df = pd.read_sql(f"SELECT * FROM `{safe}` LIMIT {sample_rows}", engine)
+        else:
+            return JsonResponse({'ok': False, 'error': 'Tipo desconocido'})
+        cols = [str(c) for c in df.columns]
+        # Limitar longitud de valores para preview
+        def _tr(v):
+            s = '' if pd.isna(v) else str(v)
+            return s[:120]
+        data = [[_tr(v) for v in row] for row in df.itertuples(index=False, name=None)]
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': str(e)})
+
+    return JsonResponse({'ok': True, 'columnas': cols, 'data': data})
+
+
+# ===== MODIFICACIÓN FLUJO seleccionar_datos: integrar columnas en el paso 2 (sin step 3) =====
+
+def seleccionar_datos(request):
+    """
+    Paso 1: Subir archivo
+    Paso 2: Seleccionar tablas + columnas dinámicamente (preview al marcar checkbox)
+    Luego procesar y guardar directamente (crea/reemplaza).
+    """
     engine_url = request.session.get('engine_url')
     if not engine_url:
+        messages.error(request, "Sesión expirada. Conecta de nuevo.")
         return redirect('subir_desde_mysql')
-
-    tablas = request.session.get('tablas')
-    if not tablas:
-        return redirect('subir_sql')
-
-    # Obtener columnas de cada tabla
-    columnas_por_tabla = {}
     engine = create_engine(engine_url)
-    for tabla in tablas:
-        df = pd.read_sql(f"SELECT * FROM `{tabla}` LIMIT 1", engine)
-        columnas_por_tabla[tabla] = list(df.columns)
+    
+    if request.GET.get('reset') == '1':
+        for k in ['wizard_step','source_type','temp_file','excel_sheets','created_tables']:
+            request.session.pop(k, None)
+        request.session['wizard_step'] = 1
+        return redirect('seleccionar_datos')
+    
+    step = request.session.get('wizard_step', 1)
+    source_type = request.session.get('source_type')  # 'excel', 'csv', 'sql'
+    temp_file = request.session.get('temp_file')
+    excel_sheets = request.session.get('excel_sheets', [])
+    created_tables = request.session.get('created_tables', [])
 
-    if request.method == 'POST':
-        tablas_seleccionadas = request.POST.getlist('tablas')
-        if tablas_seleccionadas:
-            request.session['tablas_seleccionadas'] = tablas_seleccionadas
-            messages.success(request, "Tablas seleccionadas correctamente.")
-            return redirect('seleccionar_columnas')
-    tablas_columnas = [(tabla, columnas_por_tabla[tabla]) for tabla in tablas]
+    # --- SUBIR ARCHIVO (STEP 1) ---
+    if request.method == 'POST' and request.POST.get('accion') == 'subir_archivo':
+        archivo = request.FILES.get('archivo_fuente')
+        if not archivo:
+            messages.error(request, "Selecciona un archivo.")
+            return redirect('seleccionar_datos')
+        nombre = archivo.name.lower()
+        ext = os.path.splitext(nombre)[1]
+        for k in ['source_type','temp_file','excel_sheets','created_tables']:
+            request.session.pop(k, None)
+        import tempfile
+        try:
+            if ext in ('.xlsx', '.xls'):
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                for chunk in archivo.chunks():
+                    tmp.write(chunk)
+                tmp.close()
+                xls = pd.ExcelFile(tmp.name)
+                request.session['source_type'] = 'excel'
+                request.session['temp_file'] = tmp.name
+                request.session['excel_sheets'] = xls.sheet_names
+                request.session['wizard_step'] = 2
+                messages.success(request, f"Excel cargado ({len(xls.sheet_names)} hojas).")
+            elif ext == '.csv':
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                for chunk in archivo.chunks():
+                    tmp.write(chunk)
+                tmp.close()
+                request.session['source_type'] = 'csv'
+                request.session['temp_file'] = tmp.name
+                request.session['excel_sheets'] = ['csv_table']
+                request.session['wizard_step'] = 2
+                messages.success(request, "CSV cargado.")
+            elif ext == '.sql':
+                script = archivo.read().decode('utf-8', errors='ignore')
+                bloques = [b.strip() for b in script.split(';') if b.strip()]
+                before = set(_extraer_tablas_creadas(engine))
+                with engine.begin() as conn:
+                    for stmt in bloques:
+                        try:
+                            conn.execute(text(stmt))
+                        except Exception as e:
+                            #Statment omitido, Sentencia SQL no ejecutada, ya existe la tabla 
+                            messages.warning(request, f"Stmt omitido: la tabla ya existe ()")
+                after = set(_extraer_tablas_creadas(engine))
+                nuevas = sorted(list(after - before)) or sorted(list(after))
+                request.session['source_type'] = 'sql'
+                request.session['created_tables'] = nuevas
+                request.session['wizard_step'] = 2
+                messages.success(request, f"Script SQL ejecutado en {len(nuevas)} tablas.")
+            else:
+                messages.error(request, "Formato no soportado.")
+        except Exception as e:
+            messages.error(request, f"Error: {e}")
+        return redirect('seleccionar_datos')
 
-    return render(request, "archivos/seleccionar_tablas.html", {
-    "tablas_columnas": tablas_columnas,
-})
+    # --- PROCESAR (Paso 2 directo) ---
+    if request.method == 'POST' and request.POST.get('accion') == 'procesar_columnas' and step == 2:
+        tablas_sel = request.POST.getlist('tablas')
+        if not tablas_sel:
+            messages.error(request, "Selecciona al menos una tabla.")
+            return redirect('seleccionar_datos')
 
+        normalizar = bool(request.POST.get('aplicar_normalizacion'))
+        procesadas = 0
 
-
-def preparar_sql_para_reemplazo(archivo_sql):
-    contenido = archivo_sql.read().decode("utf-8")
-    lineas = contenido.splitlines()
-    nuevo_sql = []
-    for linea in lineas:
-        if linea.strip().upper().startswith("CREATE TABLE"):
-            # Extraer el nombre de la tabla
-            partes = linea.strip().split()
-            if len(partes) >= 3:
-                nombre = partes[2].strip('`').strip()
-                nuevo_sql.append(f"DROP TABLE IF EXISTS {nombre};")
-        nuevo_sql.append(linea)
-    return "\n".join(nuevo_sql)
-
-
-
-
-def seleccionar_columnas(request):
-    engine_url = request.session.get('engine_url')
-    tablas_seleccionadas = request.session.get('tablas_seleccionadas', [])
-    columnas = {}
-    filas_info = {}
-
-    engine = create_engine(engine_url)
-    # Obtener columnas y número de filas de cada tabla seleccionada
-    for tabla in tablas_seleccionadas:
-        df = pd.read_sql(f"SELECT * FROM `{tabla}`", engine)
-        columnas[tabla] = list(df.columns)
-        filas_info[tabla] = len(df)
-
-    if request.method == 'POST':
-        for tabla in tablas_seleccionadas:
-            columnas_tabla = request.POST.getlist(f'columnas_{tabla}')
-            fila_inicio = int(request.POST.get(f'fila_inicio_{tabla}', 0))
-            fila_fin = int(request.POST.get(f'fila_fin_{tabla}', filas_info[tabla]))
-
-            if not columnas_tabla:
+        for tabla in tablas_sel:
+            cols_sel = request.POST.getlist(f'columnas_{tabla}')
+            if not cols_sel:
                 continue
 
-            # Leer solo las columnas y filas seleccionadas
-            df = pd.read_sql(
-                f"SELECT {', '.join([f'`{col}`' for col in columnas_tabla])} FROM `{tabla}`",
-                engine
-            )
-            df = df.iloc[fila_inicio:fila_fin]  # Selección de filas
+            # Obtener DataFrame según origen
+            if source_type == 'excel':
+                try:
+                    df_full = pd.read_excel(temp_file, sheet_name=tabla, dtype=object)
+                except Exception:
+                    df_full = pd.DataFrame()
+            elif source_type == 'csv':
+                try:
+                    df_full = pd.read_csv(temp_file, dtype=object)
+                except Exception:
+                    df_full = pd.DataFrame()
+            else:  # sql
+                try:
+                    safe = re.sub(r'[^A-Za-z0-9_]', '', tabla)
+                    select_cols = ", ".join([f"`{c}`" for c in cols_sel])
+                    df_full = pd.read_sql(f"SELECT {select_cols} FROM `{safe}`", engine)
+                except Exception:
+                    df_full = pd.DataFrame(columns=cols_sel)
 
-            # Preprocesamiento
-            df = df.rename(columns={col: col.strip().replace(" ", "_").lower() for col in df.columns})
-            for col in df.columns:
-                df[col] = df[col].apply(limpiar_valor)
-            df.to_sql(tabla, engine, if_exists='replace', index=False)
+            if not df_full.empty and source_type in ('excel', 'csv'):
+                # Subconjunto de columnas
+                df_full = df_full[[c for c in cols_sel if c in df_full.columns]]
 
-        messages.success(request, "¡Datos subidos y tablas reemplazadas correctamente!")
-        for key in ['tablas', 'tablas_seleccionadas', 'columnas', 'columnas_elegidas']:
-            if key in request.session:
-                del request.session[key]
+            # Rango
+            def _toi(v, d):
+                try:
+                    return int(v)
+                except:
+                    return d
+            inicio = _toi(request.POST.get(f'fila_inicio_{tabla}', 0), 0)
+            fin_raw = (request.POST.get(f'fila_fin_{tabla}', '') or '').strip()
+            fin = _toi(fin_raw, len(df_full)) if fin_raw else len(df_full)
+            if inicio < 0: inicio = 0
+            if fin > len(df_full): fin = len(df_full)
+            if fin < inicio: fin = inicio
+            df = df_full.iloc[inicio:fin] if not df_full.empty else df_full
+
+            # Renombrar
+            nuevos = {}
+            usados = set()
+            for col in cols_sel:
+                nuevo = (request.POST.get(f'rename_{tabla}_{col}', col) or col).strip()
+                nuevo = re.sub(r'\W+', '_', nuevo) or col
+                base = nuevo; k = 1
+                while nuevo in usados:
+                    k += 1
+                    nuevo = f"{base}_{k}"
+                usados.add(nuevo)
+                nuevos[col] = nuevo
+            if not df.empty:
+                df = df.rename(columns=nuevos)
+            else:
+                df = pd.DataFrame(columns=[nuevos[c] for c in cols_sel])
+
+            # Normalizar
+            if normalizar and not df.empty:
+                for c in df.columns:
+                    df[c] = df[c].apply(_normalizar_celda)
+
+            final_name = request.POST.get(f'nombre_tabla_final_{tabla}', tabla).strip() or tabla
+            final_name = re.sub(r'\W+', '_', final_name)[:60]
+
+            try:
+                df.to_sql(final_name, engine, if_exists='replace', index=False)
+                procesadas += 1
+            except Exception as e:
+                messages.error(request, f"Error guardando {final_name}: {e}")
+
+        if procesadas:
+            messages.success(request, f"{procesadas} tabla(s) guardada(s).")
+        else:
+            messages.error(request, "No se guardó ninguna tabla.")
+        # Reset flujo
+        for k in ['wizard_step','source_type','temp_file','excel_sheets','created_tables']:
+            request.session.pop(k, None)
         return redirect('index')
-    
-    return render(
-        request,
-        "archivos/seleccionar_columnas.html",
-        {"columnas": columnas, "tablas": tablas_seleccionadas, "filas_info": filas_info}
-    )
+
+    # Render Step
+    step = request.session.get('wizard_step', 1)
+
+    if step == 2:
+        if source_type == 'excel':
+            tablas_disponibles = excel_sheets
+        elif source_type == 'csv':
+            tablas_disponibles = ['csv_table']
+        elif source_type == 'sql':
+            tablas_disponibles = created_tables or _extraer_tablas_creadas(engine)
+        else:
+            tablas_disponibles = []
+        return render(request, 'archivos/seleccionar_datos.html', {
+            'step': 2,
+            'tablas_disponibles': tablas_disponibles,
+            'source_type': source_type
+        })
+
+    # Paso 1
+    return render(request, 'archivos/seleccionar_datos.html', {'step': 1})
+# ...existing code...
+
+
+def _extraer_tablas_creadas(engine):
+    try:
+        return pd.read_sql("SHOW TABLES", engine).iloc[:, 0].tolist()
+    except Exception:
+        return []
+
+def _normalizar_celda(valor):
+    """
+    Normaliza una celda según reglas simples:
+      - Cadenas vacías o equivalentes a nulo ('n/a', 'na', 'none', 'null') -> None
+      - Si la cadena inicia con un número entero (ej: '15 días', '20kg', '  7 items') devuelve ese entero
+      - En cualquier otro caso devuelve el valor original
+    No altera tipos que no sean str.
+    """
+    if isinstance(valor, str):
+        texto = valor.strip()
+        if not texto or texto.lower() in ('n/a', 'na', 'none', 'null'):
+            return None
+
+        # Captura un entero inicial (positivo o negativo) al comienzo de la cadena
+        coincidencia = re.match(r'^(-?\d+)', texto)
+        if coincidencia:
+            numero_str = coincidencia.group(1)
+            try:
+                return int(numero_str)
+            except Exception:
+                # Si falla la conversión, se deja el valor original
+                pass
+
+    return valor
+
+
+

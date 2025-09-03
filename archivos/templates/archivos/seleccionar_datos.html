@@ -1,0 +1,191 @@
+{% extends 'archivos/base.html' %}
+{% block title %}Importar Datos{% endblock %}
+{% block content %}
+<div class="container mt-4">
+  {% if step == 1 %}
+    <h4>Paso 1: Subir archivo</h4>
+    <form method="post" enctype="multipart/form-data" class="mt-3">
+      {% csrf_token %}
+      <div class="mb-3">
+        <input class="form-control" type="file" name="archivo_fuente" accept=".sql,.csv,.xlsx,.xls">
+        <small class="text-muted">Soportados: .sql, .xlsx, .xls, .csv</small>
+      </div>
+      <button class="btn btn-primary" name="accion" value="subir_archivo">Continuar</button>
+    </form>
+
+  {% elif step == 2 %}
+    <h4>Paso 2: Seleccionar tablas y columnas</h4>
+    <form method="post" id="form-procesar">
+      {% csrf_token %}
+      <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" id="norm" name="aplicar_normalizacion">
+        <label class="form-check-label" for="norm">Normalización básica ej: ("15 días" → 15)</label>
+      </div>
+
+      <div class="mb-3">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll(true)">Marcar todas</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll(false)">Desmarcar todas</button>
+      </div>
+
+      {% if tablas_disponibles %}
+        {% for t in tablas_disponibles %}
+          <div class="card mb-3 shadow-sm">
+            <div class="card-body pb-2">
+              <div class="d-flex align-items-center gap-3">
+                <div class="form-check">
+                  <input class="form-check-input tabla-check" type="checkbox" name="tablas" value="{{ t }}" id="tab_{{ t }}"
+                         onchange="toggleTabla('{{ t }}')">
+                  <label class="form-check-label fw-bold" for="tab_{{ t }}">{{ t }}</label>
+                </div>
+                <small class="text-muted" id="info_{{ t }}">(sin cargar)</small>
+                <div class="ms-auto">
+                  <button type="button" class="btn btn-sm btn-outline-primary d-none" id="btnCols_{{ t }}"
+                          onclick="toggleCols('{{ t }}')">Cols On/Off</button>
+                </div>
+              </div>
+              <div class="mt-3 d-none" id="panel_{{ t }}">
+                <div class="row g-2 mb-2">
+                  <div class="col-sm-3">
+                    <label class="form-label form-label-sm mb-1">Fila inicio</label>
+                    <input type="number" class="form-control form-control-sm" name="fila_inicio_{{ t }}" value="0" min="0">
+                  </div>
+                  <div class="col-sm-3">
+                    <label class="form-label form-label-sm mb-1">Fila fin (vacío = todas)</label>
+                    <input type="number" class="form-control form-control-sm" name="fila_fin_{{ t }}" min="0">
+                  </div>
+                  <div class="col-sm-4">
+                    <label class="form-label form-label-sm mb-1">Nombre final tabla</label>
+                    <input type="text" class="form-control form-control-sm" name="nombre_tabla_final_{{ t }}" value="{{ t }}">
+                  </div>
+                </div>
+                <div class="mb-2">
+                  <input type="text" class="form-control form-control-sm" placeholder="Filtrar columnas"
+                         oninput="filterCols('{{ t }}', this.value)">
+                </div>
+                <div id="cols_wrap_{{ t }}" class="mb-3"></div>
+                <div class="table-responsive small" id="preview_wrap_{{ t }}"></div>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+        <button class="btn btn-primary" name="accion" value="procesar_columnas">Guardar en SQL</button>
+        <a href="{% url 'seleccionar_datos' %}" class="btn btn-secondary">Reiniciar</a>
+        <div class="container mt-4">
+          {% if step == 1 %}
+            {# ...existing code paso 1... #}
+          {% elif step == 2 %}
+            
+            <div class="mb-3">
+              <a href="{% url 'seleccionar_datos' %}?reset=1" class="btn btn-sm btn-outline-danger">
+                Subir otro archivo
+              </a>
+            </div>
+            <form method="post" id="form-procesar">
+              {% csrf_token %}
+            </form>
+          {% endif %}
+        </div>
+      {% else %}
+        <p>No se detectaron tablas.</p>
+      {% endif %}
+    </form>
+    
+    <script>
+      function toggleAll(state){
+        document.querySelectorAll('.tabla-check').forEach(c => {
+          c.checked = state;
+          toggleTabla(c.value);
+        });
+      }
+
+      function toggleTabla(tabla){
+        const chk = document.getElementById('tab_' + tabla);
+        const panel = document.getElementById('panel_' + tabla);
+        if(!chk.checked){
+          panel.classList.add('d-none');
+          return;
+        }
+        // Si ya tiene contenido, solo mostrar
+        if(panel.dataset.loaded === '1'){
+          panel.classList.remove('d-none');
+          return;
+        }
+        cargarPreview(tabla);
+      }
+
+      function cargarPreview(tabla){
+        const info = document.getElementById('info_' + tabla);
+        info.textContent = 'Cargando...';
+        fetch(`{% url 'preview_tabla' %}?tabla=${encodeURIComponent(tabla)}`)
+          .then(r => r.json())
+          .then(j => {
+            if(!j.ok){
+              info.textContent = 'Error: ' + j.error;
+              return;
+            }
+            info.textContent = `${j.columnas.length} col(s), ${j.data.length} fila(s) muestra`;
+            renderCols(tabla, j.columnas);
+            renderPreview(tabla, j.columnas, j.data);
+            document.getElementById('panel_' + tabla).classList.remove('d-none');
+            document.getElementById('panel_' + tabla).dataset.loaded = '1';
+            document.getElementById('btnCols_' + tabla).classList.remove('d-none');
+          })
+          .catch(e => {
+            info.textContent = 'Error';
+          });
+      }
+
+      function renderCols(tabla, columnas){
+        const wrap = document.getElementById('cols_wrap_' + tabla);
+        wrap.innerHTML = '<strong>Columnas:</strong>';
+        columnas.forEach(col => {
+          const row = document.createElement('div');
+          row.className = `row align-items-center mt-1 col-item col-${tabla}`;
+          row.setAttribute('data-col', col.toLowerCase());
+          row.innerHTML = `
+            <div class="col-auto">
+              <input class="form-check-input col-box-${tabla}" type="checkbox"
+                     name="columnas_${tabla}" value="${col}" id="c_${tabla}_${col}" checked>
+            </div>
+            <div class="col-auto">
+              <label class="form-check-label" for="c_${tabla}_${col}">${col}</label>
+            </div>
+            <div class="col">
+              <input type="text" class="form-control form-control-sm"
+                     name="rename_${tabla}_${col}" value="${col}">
+            </div>`;
+          wrap.appendChild(row);
+        });
+      }
+
+      function renderPreview(tabla, cols, data){
+        const wrap = document.getElementById('preview_wrap_' + tabla);
+        if(!cols.length){
+          wrap.innerHTML = '<em>Sin datos</em>';
+          return;
+        }
+        let thead = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>';
+        let tbody = data.map(r => '<tr>' + r.map(v => `<td>${v===null?'':v}</td>`).join('') + '</tr>').join('');
+        wrap.innerHTML = `<table class="table table-sm table-bordered mb-0">
+          <thead>${thead}</thead><tbody>${tbody}</tbody></table>`;
+      }
+
+      function toggleCols(tabla){
+        const boxes = document.querySelectorAll('.col-box-' + tabla);
+        let allChecked = true;
+        boxes.forEach(b => { if(!b.checked){ allChecked = false; } });
+        const ns = !allChecked;
+        boxes.forEach(b => b.checked = ns);
+      }
+
+      function filterCols(tabla, term){
+        const t = term.toLowerCase();
+        document.querySelectorAll('#cols_wrap_' + tabla + ' .col-item').forEach(item=>{
+          const n = item.getAttribute('data-col');
+          item.style.display = (!t || n.includes(t)) ? '' : 'none';
+        });
+      }
+    </script>
+  {% endif %}
+</div>
+{% endblock %}

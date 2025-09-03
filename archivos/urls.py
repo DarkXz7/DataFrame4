@@ -31,10 +31,11 @@ urlpatterns = [
     
     # Elegir para subir desde archivos de Bases de datos
     path('subir-sql/', views.subir_sql, name='subir_sql'),
+    path('seleccionar-datos/', views.seleccionar_datos, name='seleccionar_datos'),
+    path('api/preview-tabla/', views.preview_tabla, name='preview_tabla'),
     path('subir-desde-postgres/', views.subir_desde_postgres, name='subir_desde_postgres'),
     path('subir-desde-mysql/', views.subir_desde_mysql, name='subir_desde_mysql'),
-    path("seleccionar_tablas/", views.seleccionar_tablas, name="seleccionar_tablas"),
-    path('subir-desde-postgres/', views.subir_desde_postgres, name='subir_desde_postgres'),
+    
     path('subir-desde-sqlserver/', views.subir_desde_sqlserver, name='subir_desde_sqlserver'),
     # URLs de compatibilidad
     path('subir/', views.subir_archivo, name='subir_archivo'),
