@@ -1037,97 +1037,132 @@ def preview_tabla(request):
 
 # ===== MODIFICACIÓN FLUJO seleccionar_datos: integrar columnas en el paso 2 (sin step 3) =====
 
+
+
 def seleccionar_datos(request):
     """
-    Paso 1: Subir archivo
-    Paso 2: Seleccionar tablas + columnas dinámicamente (preview al marcar checkbox)
-    Luego procesar y guardar directamente (crea/reemplaza).
+    Paso 1:
+      - Subir archivo local (Excel / CSV / SQL)
+      - O tomar archivo desde carpeta compartida (ruta UNC + nombre archivo)
+      - (Opcional) Guardar como proceso si es .sql
+    Paso 2:
+      - Seleccionar tablas/hojas, columnas, rangos, renombrar y normalizar
+      - Guardar directamente en la BD conectada (replace)
     """
     engine_url = request.session.get('engine_url')
     if not engine_url:
         messages.error(request, "Sesión expirada. Conecta de nuevo.")
         return redirect('subir_desde_mysql')
     engine = create_engine(engine_url)
-    
+
+    # Reset rápido vía ?reset=1
     if request.GET.get('reset') == '1':
-        for k in ['wizard_step','source_type','temp_file','excel_sheets','created_tables']:
+        for k in ['wizard_step', 'source_type', 'temp_file', 'excel_sheets', 'created_tables']:
             request.session.pop(k, None)
         request.session['wizard_step'] = 1
         return redirect('seleccionar_datos')
-    
+
     step = request.session.get('wizard_step', 1)
-    source_type = request.session.get('source_type')  # 'excel', 'csv', 'sql'
+    source_type = request.session.get('source_type')  # 'excel','csv','sql'
     temp_file = request.session.get('temp_file')
     excel_sheets = request.session.get('excel_sheets', [])
     created_tables = request.session.get('created_tables', [])
 
-    # --- SUBIR ARCHIVO (STEP 1) ---
+    # ========== PASO 1: SUBIR / CARGAR ARCHIVO ==========
     if request.method == 'POST' and request.POST.get('accion') == 'subir_archivo':
-        archivo = request.FILES.get('archivo_fuente')
-        if not archivo:
-            messages.error(request, "Selecciona un archivo.")
-            return redirect('seleccionar_datos')
-        nombre = archivo.name.lower()
-        ext = os.path.splitext(nombre)[1]
-        for k in ['source_type','temp_file','excel_sheets','created_tables']:
+        modo = request.POST.get('modo_origen', 'local')  # 'local' | 'compartido'
+        # Limpieza estado previo
+        for k in ['source_type', 'temp_file', 'excel_sheets', 'created_tables']:
             request.session.pop(k, None)
-        import tempfile
+
+        import tempfile, shutil
         try:
-            if ext in ('.xlsx', '.xls'):
+            script = None  # Texto SQL si es .sql
+            if modo == 'compartido':
+                ruta = (request.POST.get('ruta_compartida') or '').strip()
+                nombre_archivo = (request.POST.get('nombre_archivo') or '').strip()
+                if not ruta or not nombre_archivo:
+                    messages.error(request, "Ruta y nombre de archivo requeridos.")
+                    return redirect('seleccionar_datos')
+                full_path = os.path.join(ruta, nombre_archivo)
+                if not os.path.isfile(full_path):
+                    messages.error(request, f"No se encuentra el archivo: {full_path}")
+                    return redirect('seleccionar_datos')
+                ext = os.path.splitext(full_path.lower())[1]
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                with open(full_path, 'rb') as fsrc, open(tmp.name, 'wb') as fdst:
+                    shutil.copyfileobj(fsrc, fdst)
+                archivo_path = tmp.name
+                if ext == '.sql':
+                    with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        script = f.read()
+            else:
+                archivo = request.FILES.get('archivo_fuente')
+                if not archivo:
+                    messages.error(request, "Selecciona un archivo.")
+                    return redirect('seleccionar_datos')
+                nombre = archivo.name.lower()
+                ext = os.path.splitext(nombre)[1]
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
                 for chunk in archivo.chunks():
                     tmp.write(chunk)
                 tmp.close()
-                xls = pd.ExcelFile(tmp.name)
+                archivo_path = tmp.name
+                if ext == '.sql':
+                    archivo.seek(0)
+                    script = archivo.read().decode('utf-8', errors='ignore')
+
+            # Procesar según extensión
+            if ext in ('.xlsx', '.xls'):
+                xls = pd.ExcelFile(archivo_path)
                 request.session['source_type'] = 'excel'
-                request.session['temp_file'] = tmp.name
+                request.session['temp_file'] = archivo_path
                 request.session['excel_sheets'] = xls.sheet_names
                 request.session['wizard_step'] = 2
                 messages.success(request, f"Excel cargado ({len(xls.sheet_names)} hojas).")
             elif ext == '.csv':
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-                for chunk in archivo.chunks():
-                    tmp.write(chunk)
-                tmp.close()
                 request.session['source_type'] = 'csv'
-                request.session['temp_file'] = tmp.name
+                request.session['temp_file'] = archivo_path
                 request.session['excel_sheets'] = ['csv_table']
                 request.session['wizard_step'] = 2
                 messages.success(request, "CSV cargado.")
             elif ext == '.sql':
-                script = archivo.read().decode('utf-8', errors='ignore')
+                if not script:
+                    messages.error(request, "Script SQL vacío.")
+                    return redirect('seleccionar_datos')
                 bloques = [b.strip() for b in script.split(';') if b.strip()]
                 before = set(_extraer_tablas_creadas(engine))
+                omitidos = 0
                 with engine.begin() as conn:
                     for stmt in bloques:
                         try:
                             conn.execute(text(stmt))
                         except Exception as e:
-                            #Statment omitido, Sentencia SQL no ejecutada, ya existe la tabla 
-                            messages.warning(request, f"Stmt omitido: la tabla ya existe ()")
+                            if 'exist' in str(e).lower():
+                                omitidos += 1
+                            else:
+                                messages.warning(request, "Sentencia omitida.")
                 after = set(_extraer_tablas_creadas(engine))
                 nuevas = sorted(list(after - before)) or sorted(list(after))
                 request.session['source_type'] = 'sql'
                 request.session['created_tables'] = nuevas
                 request.session['wizard_step'] = 2
-                
-                # === Proceso de automatizacion ===
+
+                # Guardar como proceso (automatización) si el usuario lo pide
                 if request.POST.get('guardar_proceso'):
                     import time
                     from sqlalchemy.engine.url import make_url
                     url = make_url(engine_url)
                     nombre_proc = (request.POST.get('nombre_proceso') or f"proc_sql_{int(time.time())}").strip()
-                    if not nombre_proc:
-                        nombre_proc = f"proc_sql_{int(time.time())}"
                     cfg = {
                         "nombre_proceso": nombre_proc,
                         "origen": {
                             "tipo": "sql_script",
-                            "contenido": script,              # guardamos el texto del script
-                            "tablas_resultantes": nuevas      # tablas creadas / afectadas
+                            "contenido": script,
+                            "tablas_resultantes": nuevas
                         },
                         "destino": {
-                            "motor": "mysql",                 # ajusta si soportas otros
+                            "motor": "mysql",  # Ajustar si detectas otro motor
                             "conexion": {
                                 "host": url.host,
                                 "puerto": url.port or 3306,
@@ -1136,12 +1171,9 @@ def seleccionar_datos(request):
                                 "base": url.database
                             }
                         },
-                        "ejecucion": {
-                            "on_error": "continue"
-                        }
+                        "ejecucion": {"on_error": "continue"}
                     }
                     try:
-                        # ProcessConfig disponible por from .models import *
                         ProcessConfig.objects.create(
                             nombre=nombre_proc,
                             descripcion="Proceso generado desde carga .sql",
@@ -1150,15 +1182,19 @@ def seleccionar_datos(request):
                         messages.success(request, f"Proceso '{nombre_proc}' guardado.")
                     except Exception as e:
                         messages.error(request, f"No se pudo guardar el proceso: {e}")
-                
-                messages.success(request, f"Script SQL ejecutado en {len(nuevas)} tablas.")
+
+                msg = f"Script SQL ejecutado ({len(nuevas)} tablas)."
+                if omitidos:
+                    msg += f" {omitidos} sentencia(s) omitida(s)."
+                messages.success(request, msg)
             else:
                 messages.error(request, "Formato no soportado.")
+            return redirect('seleccionar_datos')
         except Exception as e:
             messages.error(request, f"Error: {e}")
-        return redirect('seleccionar_datos')
+            return redirect('seleccionar_datos')
 
-    # --- PROCESAR (Paso 2 directo) ---
+    # ========== PASO 2: PROCESAR TABLAS / COLUMNAS ==========
     if request.method == 'POST' and request.POST.get('accion') == 'procesar_columnas' and step == 2:
         tablas_sel = request.POST.getlist('tablas')
         if not tablas_sel:
@@ -1173,7 +1209,7 @@ def seleccionar_datos(request):
             if not cols_sel:
                 continue
 
-            # Obtener DataFrame según origen
+            # Cargar DataFrame según origen
             if source_type == 'excel':
                 try:
                     df_full = pd.read_excel(temp_file, sheet_name=tabla, dtype=object)
@@ -1193,10 +1229,9 @@ def seleccionar_datos(request):
                     df_full = pd.DataFrame(columns=cols_sel)
 
             if not df_full.empty and source_type in ('excel', 'csv'):
-                # Subconjunto de columnas
                 df_full = df_full[[c for c in cols_sel if c in df_full.columns]]
 
-            # Rango
+            # Rango de filas
             def _toi(v, d):
                 try:
                     return int(v)
@@ -1210,7 +1245,7 @@ def seleccionar_datos(request):
             if fin < inicio: fin = inicio
             df = df_full.iloc[inicio:fin] if not df_full.empty else df_full
 
-            # Renombrar
+            # Renombrado
             nuevos = {}
             usados = set()
             for col in cols_sel:
@@ -1227,7 +1262,7 @@ def seleccionar_datos(request):
             else:
                 df = pd.DataFrame(columns=[nuevos[c] for c in cols_sel])
 
-            # Normalizar
+            # Normalización
             if normalizar and not df.empty:
                 for c in df.columns:
                     df[c] = df[c].apply(_normalizar_celda)
@@ -1239,20 +1274,23 @@ def seleccionar_datos(request):
                 df.to_sql(final_name, engine, if_exists='replace', index=False)
                 procesadas += 1
             except Exception as e:
-                messages.error(request, f"Error guardando {final_name}: {e}")
+                # Mensaje corto si existe
+                if 'exists' in str(e).lower() and 'table' in str(e).lower():
+                    messages.error(request, f"Tabla {final_name} ya existe.")
+                else:
+                    messages.error(request, f"Error guardando {final_name}.")
 
         if procesadas:
             messages.success(request, f"{procesadas} tabla(s) guardada(s).")
         else:
             messages.error(request, "No se guardó ninguna tabla.")
         # Reset flujo
-        for k in ['wizard_step','source_type','temp_file','excel_sheets','created_tables']:
+        for k in ['wizard_step', 'source_type', 'temp_file', 'excel_sheets', 'created_tables']:
             request.session.pop(k, None)
         return redirect('index')
 
-    # Render Step
+    # ========== RENDER ==========
     step = request.session.get('wizard_step', 1)
-
     if step == 2:
         if source_type == 'excel':
             tablas_disponibles = excel_sheets
@@ -1268,9 +1306,9 @@ def seleccionar_datos(request):
             'source_type': source_type
         })
 
-    # Paso 1
     return render(request, 'archivos/seleccionar_datos.html', {'step': 1})
-# ...existing code...
+
+# ...existing code abajo...
 
 
 def _extraer_tablas_creadas(engine):
