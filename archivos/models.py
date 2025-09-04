@@ -74,3 +74,33 @@ class ArchivoCargado(models.Model):
 
     def __str__(self):
         return self.nombre
+    
+    
+    
+
+
+class ProcessConfig(models.Model):
+    nombre = models.CharField(max_length=120, unique=True)
+    descripcion = models.TextField(blank=True)
+    json_config = models.JSONField()
+    activo = models.BooleanField(default=True)
+    creado = models.DateTimeField(auto_now_add=True)
+    actualizado = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.nombre
+
+
+class ProcessRunLog(models.Model):
+    proceso = models.ForeignKey(ProcessConfig, on_delete=models.CASCADE, related_name='runs')
+    inicio = models.DateTimeField(auto_now_add=True)
+    fin = models.DateTimeField(null=True, blank=True)
+    exito = models.BooleanField(default=False)
+    filas_totales = models.IntegerField(default=0)
+    mensaje = models.TextField(blank=True)
+    errores = models.JSONField(null=True, blank=True)
+
+    def duracion_segundos(self):
+        if self.fin and self.inicio:
+            return (self.fin - self.inicio).total_seconds()
+        return None

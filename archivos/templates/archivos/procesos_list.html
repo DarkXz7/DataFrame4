@@ -1,0 +1,31 @@
+{% extends 'archivos/base.html' %}
+{% block title %}Procesos{% endblock %}
+{% block content %}
+<div class="container mt-4">
+  <h4>Procesos Automatizados</h4>
+  {% if messages %}
+    {% for m in messages %}
+      <div class="alert alert-{{ m.tags }} py-1 mb-2">{{ m }}</div>
+    {% endfor %}
+  {% endif %}
+  {% if procesos %}
+    <table class="table table-sm table-striped align-middle">
+      <thead><tr><th>Nombre</th><th>Descripción</th><th>Actualizado</th><th></th></tr></thead>
+      <tbody>
+        {% for p in procesos %}
+          <tr>
+            <td>{{ p.nombre }}</td>
+            <td>{{ p.descripcion|default:"-" }}</td>
+            <td>{{ p.actualizado|date:"Y-m-d H:i" }}</td>
+            <td>
+              <a class="btn btn-success btn-sm" href="{% url 'ejecutar_proceso' p.id %}">Ejecutar</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No hay procesos configurados.</p>
+  {% endif %}
+</div>
+{% endblock %}

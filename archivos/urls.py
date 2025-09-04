@@ -40,4 +40,9 @@ urlpatterns = [
     # URLs de compatibilidad
     path('subir/', views.subir_archivo, name='subir_archivo'),
     path('guardar/', views.guardar_archivo, name='guardar_archivo'),
+    
+    
+    #Automatizacion de procesos
+    path('procesos/', views.procesos_list, name='procesos_list'),
+    path('procesos/<int:proceso_id>/ejecutar/', views.ejecutar_proceso, name='ejecutar_proceso'),
 ]

@@ -13,7 +13,7 @@ import humanize
 import base64
 from io import BytesIO, StringIO
 from .forms import SubirArchivoForm, CarpetaCompartidaForm
-from .models import ArchivoCargado, CarpetaCompartida, ArchivoDetectado, ArchivoProcesado
+from .models import *
 from .utils import detectar_archivos_en_carpeta, leer_hojas_excel, procesar_archivo
 from django.views.decorators.csrf import csrf_exempt 
 from django import forms
@@ -23,6 +23,10 @@ from django import template
 from sqlalchemy import text
 from django.conf import settings
 from django.views.decorators.http import require_GET
+import traceback
+from django.utils import timezone
+
+
 
 register = template.Library()
 # ...existing code... (mantener todas las importaciones y otras funciones)
@@ -1106,6 +1110,47 @@ def seleccionar_datos(request):
                 request.session['source_type'] = 'sql'
                 request.session['created_tables'] = nuevas
                 request.session['wizard_step'] = 2
+                
+                # === Proceso de automatizacion ===
+                if request.POST.get('guardar_proceso'):
+                    import time
+                    from sqlalchemy.engine.url import make_url
+                    url = make_url(engine_url)
+                    nombre_proc = (request.POST.get('nombre_proceso') or f"proc_sql_{int(time.time())}").strip()
+                    if not nombre_proc:
+                        nombre_proc = f"proc_sql_{int(time.time())}"
+                    cfg = {
+                        "nombre_proceso": nombre_proc,
+                        "origen": {
+                            "tipo": "sql_script",
+                            "contenido": script,              # guardamos el texto del script
+                            "tablas_resultantes": nuevas      # tablas creadas / afectadas
+                        },
+                        "destino": {
+                            "motor": "mysql",                 # ajusta si soportas otros
+                            "conexion": {
+                                "host": url.host,
+                                "puerto": url.port or 3306,
+                                "usuario": url.username,
+                                "password": url.password,
+                                "base": url.database
+                            }
+                        },
+                        "ejecucion": {
+                            "on_error": "continue"
+                        }
+                    }
+                    try:
+                        # ProcessConfig disponible por from .models import *
+                        ProcessConfig.objects.create(
+                            nombre=nombre_proc,
+                            descripcion="Proceso generado desde carga .sql",
+                            json_config=cfg
+                        )
+                        messages.success(request, f"Proceso '{nombre_proc}' guardado.")
+                    except Exception as e:
+                        messages.error(request, f"No se pudo guardar el proceso: {e}")
+                
                 messages.success(request, f"Script SQL ejecutado en {len(nuevas)} tablas.")
             else:
                 messages.error(request, "Formato no soportado.")
@@ -1261,3 +1306,103 @@ def _normalizar_celda(valor):
 
 
 
+
+
+
+
+
+def procesos_list(request):
+    procesos = ProcessConfig.objects.filter(activo=True).order_by('-actualizado')
+    return render(request, 'archivos/procesos_list.html', {'procesos': procesos})
+
+
+
+def ejecutar_proceso(request, proceso_id):
+    proceso = get_object_or_404(ProcessConfig, id=proceso_id, activo=True)
+    run = ProcessRunLog.objects.create(proceso=proceso)
+    cfg = proceso.json_config
+    errores = []
+    total_filas = 0
+    try:
+        destino = cfg['destino']
+        motor = destino['motor']
+        conn = destino['conexion']
+        if motor == 'mysql':
+            engine_url = f"mysql+pymysql://{conn['usuario']}:{conn['password']}@{conn['host']}:{conn['puerto']}/{conn['base']}"
+        elif motor == 'postgres':
+            engine_url = f"postgresql://{conn['usuario']}:{conn['password']}@{conn['host']}:{conn['puerto']}/{conn['base']}"
+        elif motor == 'mssql':
+            engine_url = f"mssql+pyodbc://{conn['usuario']}:{conn['password']}@{conn['host']},{conn['puerto']}/{conn['base']}?driver=ODBC+Driver+17+for+SQL+Server"
+        else:
+            raise ValueError("Motor destino no soportado")
+        engine = create_engine(engine_url)
+
+        origen = cfg['origen']
+        if origen['tipo'] in ('excel','csv'):
+            # ...existing code para excel/csv...
+            pass  # (deja tu implementación previa)
+        elif origen['tipo'] == 'sql_script':
+            # 1. Cargar script (contenido inline o archivo)
+            sql_text = origen.get('contenido')
+            if not sql_text:
+                ruta_base = origen.get('ruta_base') or ''
+                archivo = origen.get('archivo')
+                if not archivo:
+                    raise ValueError("Script SQL no definido.")
+                script_path = os.path.join(ruta_base, archivo) if ruta_base else archivo
+                with open(script_path, 'r', encoding='utf-8') as f:
+                    sql_text = f.read()
+            bloques = [b.strip() for b in sql_text.split(';') if b.strip()]
+            with engine.begin() as conn:
+                for stmt in bloques:
+                    try:
+                        conn.execute(text(stmt))
+                    except Exception as e:
+                        errores.append({'stmt': stmt[:60], 'error': str(e)})
+                        if cfg.get('ejecucion', {}).get('on_error') == 'stop':
+                            raise
+            # 2. Opcional: post_copia tablas (si quieres mapear a otros nombres)
+            for m in origen.get('tablas_resultantes', []):
+                # m puede ser string (mismo nombre) o dict {'origen':'t1','destino':'t2','modo':'replace'}
+                if isinstance(m, str):
+                    tabla_origen = tabla_destino = m
+                    modo = 'replace'
+                else:
+                    tabla_origen = m.get('origen')
+                    tabla_destino = m.get('destino', tabla_origen)
+                    modo = m.get('modo', 'replace')
+                if not tabla_origen:
+                    continue
+                df = pd.read_sql(f"SELECT * FROM `{tabla_origen}`", engine)
+                df.to_sql(tabla_destino, engine, if_exists=('replace' if modo=='replace' else 'append'), index=False)
+                total_filas += len(df)
+        else:
+            raise ValueError("Origen no implementado aún")
+
+        run.exito = True
+        run.filas_totales = total_filas
+        run.mensaje = f"OK. Filas procesadas: {total_filas}"
+    except Exception as e:
+        run.exito = False
+        run.mensaje = f"Fallo: {e}"
+        errores.append({'stack': traceback.format_exc()})
+    run.fin = timezone.now()
+    if errores:
+        run.errores = errores
+    run.save()
+    if run.exito:
+        messages.success(request, f"Proceso '{proceso.nombre}' ejecutado. Filas: {run.filas_totales}")
+    else:
+        messages.error(request, f"Proceso '{proceso.nombre}' falló: {run.mensaje}")
+    return redirect('procesos_list')
+
+
+def _leer_origen_simple(tipo, archivo, hoja=None):
+    try:
+        if tipo == 'excel':
+            return pd.read_excel(archivo, sheet_name=hoja, dtype=object)
+        if tipo == 'csv':
+            return pd.read_csv(archivo, dtype=object)
+    except Exception:
+        return None
+    return None

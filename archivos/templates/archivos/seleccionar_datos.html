@@ -10,6 +10,20 @@
         <input class="form-control" type="file" name="archivo_fuente" accept=".sql,.csv,.xlsx,.xls">
         <small class="text-muted">Soportados: .sql, .xlsx, .xls, .csv</small>
       </div>
+
+
+      <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" id="gp" name="guardar_proceso">
+        <label class="form-check-label" for="gp">
+          Guardar como proceso reutilizable (solo útil si es .sql o una importación que quieras repetir)
+        </label>
+      </div>
+      <div class="mb-3">
+        <input type="text" class="form-control form-control-sm" name="nombre_proceso"
+               placeholder="Nombre del proceso (opcional)">
+        <small class="text-muted">Si lo dejas vacío se generará uno automático.</small>
+      </div>
+
       <button class="btn btn-primary" name="accion" value="subir_archivo">Continuar</button>
     </form>
 
