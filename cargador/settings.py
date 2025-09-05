@@ -81,13 +81,29 @@ WSGI_APPLICATION = 'cargador.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
+
+DATABASES = {
+        'default': {
+            'ENGINE': 'mssql',  # O 'mssql' según el paquete que uses
+            'NAME': 'pruebamiguel',  # El nombre de tu base de datos en SQL Server
+            'HOST': 'localhost\\SQLEXPRESS',  # Instancia SQLEXPRESS que está activa
+            'PORT': '1433',  # Puerto por defecto de SQL Server
+            'OPTIONS': {
+                'driver': 'ODBC Driver 17 for SQL Server', # Nombre del driver ODBC instalado
+                'Trusted_Connection': 'yes',  # Usar autenticación de Windows
+                'TrustServerCertificate': 'yes',  # No verificar certificados
+            },
+        }
+    }
+
+'''
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
-
+'''
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators

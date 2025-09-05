@@ -2,6 +2,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.http import JsonResponse
 from django.contrib import messages
 from django.core.paginator import Paginator
+from django.utils.safestring import mark_safe
 from django.views.decorators.http import require_http_methods
 from datetime import datetime
 from pathlib import Path
@@ -859,28 +860,12 @@ class ConexionSQLServerForm(forms.Form):
 
 
 def subir_desde_mysql(request):
-    if request.method == 'POST':
-        form = ConexionMySQLForm(request.POST)
-        if form.is_valid():
-            host = form.cleaned_data['host']
-            puerto = form.cleaned_data['puerto']
-            usuario = form.cleaned_data['usuario']
-            password = form.cleaned_data['password']
-            base = form.cleaned_data['base']
-
-            engine_url = f"mysql+pymysql://{usuario}:{password}@{host}:{puerto}/{base}"
-            try:
-                engine = create_engine(engine_url)
-                with engine.connect() as conn:
-                    conn.execute(text("SELECT 1"))
-                request.session['engine_url'] = engine_url
-                # antes: return redirect('seleccionar_tablas')
-                return redirect('seleccionar_datos')
-            except SQLAlchemyError as e:
-                messages.error(request, f"Error de conexión: {str(e)}")
-    else:
-        form = ConexionMySQLForm()
-    return render(request, 'archivos/subir_desde_mysql.html', {'form': form})
+    """
+    Versión actualizada: conecta automáticamente con SQL Server usando las credenciales de settings.py
+    y redirecciona a seleccionar_datos sin formulario de login
+    """
+    # Simplemente redirige a la función de SQL Server automática
+    return subir_desde_sqlserver(request)
 
 def limpiar_valor(valor):
     # Ejemplo: "15 días" -> 15, convertir valores a enteros si es posible
@@ -900,61 +885,197 @@ def subir_desde_postgres(request):
     return render(request, 'archivos/subir_desde_postgres.html', {'form': form})
 
 def subir_desde_sqlserver(request):
-    from django import forms
-    class DummyForm(forms.Form):
-        pass
-    form = DummyForm()
-    return render(request, 'archivos/subir_desde_sqlserver.html', {'form': form})
+    """
+    Conecta automáticamente a SQL Server usando las credenciales de settings.py
+    Sin necesidad de formulario de login manual
+    """
+    from django.conf import settings
+    from .sqlserver_utils import test_sqlserver_connection, get_sqlserver_connection_string
+    
+    try:
+        # Probar conexión utilizando la utilidad
+        success, message, engine = test_sqlserver_connection()
+        
+        if success:
+            # Obtener cadena de conexión para SQLAlchemy
+            engine_url = get_sqlserver_connection_string()
+            
+            # Guardar en sesión y redirigir
+            request.session['engine_url'] = engine_url
+            messages.success(request, f"Conectado exitosamente a SQL Server")
+            messages.info(request, message)
+            return redirect('seleccionar_datos')
+        else:
+            # Falló la conexión
+            messages.error(request, f"Error conectando a SQL Server: {message}")
+            
+            # Sugerir soluciones basadas en el mensaje de error
+            if "10061" in message:
+                # Error de conexión rechazada
+                solucion = """
+                <p><strong>Error de conexión 10061</strong>: El servidor rechazó la conexión</p>
+                <ul>
+                    <li>Usa el script <code>configurar_sqlserver.py</code> como administrador para configurar SQL Server</li>
+                    <li>En SQL Server Configuration Manager, activa TCP/IP en Protocolos</li>
+                    <li>Reinicia el servicio SQL Server después de activar TCP/IP</li>
+                    <li>Asegúrate que el firewall permita conexiones al puerto 1433</li>
+                    <li>Verifica que estás usando el nombre de instancia correcto (SQLEXPRESS)</li>
+                </ul>
+                """
+            elif "Login failed" in message or "inicio de sesión" in message.lower():
+                # Error de autenticación
+                solucion = """
+                <p><strong>Error de autenticación</strong>: Credenciales incorrectas</p>
+                <ul>
+                    <li>Verifica que el usuario y contraseña sean correctos en settings.py</li>
+                    <li>Ejecuta <code>verificar_sqlexpress.py</code> para probar autenticación</li>
+                    <li>Prueba usar autenticación de Windows (Trusted_Connection=yes)</li>
+                    <li>Ejecuta <code>configurar_base_datos.py</code> para crear el usuario</li>
+                </ul>
+                """
+            else:
+                # Error genérico
+                solucion = """
+                <p><strong>Error de conexión</strong></p>
+                <ul>
+                    <li>Asegúrate que SQL Server está instalado y ejecutándose</li>
+                    <li>Verifica las credenciales en settings.py</li>
+                    <li>Revisa los logs de SQL Server para más información</li>
+                    <li>Ejecuta <code>diagnostico_sqlserver.py</code> para ayuda</li>
+                </ul>
+                """
+            
+            messages.warning(request, mark_safe(f"Soluciones posibles: {solucion}"))
+            return redirect('index')
+            
+    except Exception as e:
+        messages.error(request, f"Error general: {str(e)}")
+        return redirect('index')
+
+def conectar_sqlserver_automatico(request):
+    """
+    Alias para compatibilidad - redirige a subir_desde_sqlserver
+    """
+    return subir_desde_sqlserver(request)
 
 
 # ...existing code...
 def subir_sql(request):
+    from .sqlserver_utils import get_sqlserver_connection_string, sqlalchemy_connection
+    from .mysql_to_sqlserver import convert_mysql_to_sqlserver, execute_sqlserver_script
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    # Limpiar errores SQL de sesiones anteriores
+    if 'sql_errors' in request.session:
+        del request.session['sql_errors']
+    
     engine_url = request.session.get('engine_url')
     if not engine_url:
-        return redirect('subir_desde_mysql')
+        engine_url = get_sqlserver_connection_string()
+        request.session['engine_url'] = engine_url
+        
+    from sqlalchemy import create_engine
     engine = create_engine(engine_url)
+    
     if request.method == 'POST':
         archivo_sql = request.FILES.get('archivo_sql')
         if archivo_sql:
+            # Limpiar sesión de datos anteriores
             for key in ['tablas', 'tablas_seleccionadas', 'columnas', 'columnas_elegidas']:
                 if key in request.session:
                     del request.session[key]
-            import tempfile, subprocess
-            from sqlalchemy.engine.url import make_url
-            sql_texto = preparar_sql_para_reemplazo(archivo_sql)
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.sql', mode='w', encoding='utf-8') as tmp:
-                tmp.write(sql_texto)
-                tmp_path = tmp.name
-            url = make_url(engine_url)
-            mysql_cmd = [
-                r"C:\xampp\mysql\bin\mysql.exe",
-                f"-u{url.username}",
-                f"-p{url.password}",
-                f"-h{url.host}",
-                f"-P{url.port or 3306}",
-                url.database
-            ]
+            
+            # Leer contenido del archivo SQL
+            archivo_sql.seek(0)
+            sql_texto_original = archivo_sql.read().decode('utf-8', errors='ignore')
+            
             try:
-                with open(tmp_path, 'rb') as sqlfile:
-                    result = subprocess.run(
-                        mysql_cmd,
-                        stdin=sqlfile,
-                        capture_output=True,
-                        text=True
-                    )
-                    if result.returncode != 0:
-                        messages.error(request, f"Error MySQL: {result.stderr}")
-                        return redirect('subir_sql')
-                tablas = pd.read_sql("SHOW TABLES", engine).iloc[:, 0].tolist()
-                request.session['created_tables'] = tablas
+                # Convertir SQL de MySQL a formato compatible con SQL Server
+                sql_texto_convertido = convert_mysql_to_sqlserver(sql_texto_original)
+                
+                # Guardar versión original y convertida para visualización (opcional)
+                request.session['sql_original'] = sql_texto_original[:5000] if len(sql_texto_original) > 5000 else sql_texto_original
+                request.session['sql_convertido'] = sql_texto_convertido[:5000] if len(sql_texto_convertido) > 5000 else sql_texto_convertido
+                  # Ejecutar el script SQL convertido en SQL Server
+                resultados = execute_sqlserver_script(engine, sql_texto_convertido)
+                
+                if resultados['errors']:
+                    # Hubo errores en la ejecución
+                    error_summary = f"{len(resultados['errors'])} de {resultados['total']} sentencias fallaron."
+                    
+                    # Mostrar mensaje principal de error
+                    messages.error(request, f"Error al ejecutar SQL: {error_summary}")
+                    
+                    # Mostrar advertencias específicas si existen
+                    if 'warnings' in resultados and resultados['warnings']:
+                        for warning in resultados['warnings'][:3]:  # Limitar a 3 advertencias
+                            messages.warning(request, warning)
+                    
+                    # Mostrar detalles del primer error con sugerencia si está disponible
+                    if resultados['errors']:
+                        first_error = resultados['errors'][0]
+                        error_msg = first_error['error']
+                        
+                        # Incluir sugerencia si está disponible
+                        if 'sugerencia' in first_error and first_error['sugerencia']:
+                            error_msg += f" - Sugerencia: {first_error['sugerencia']}"
+                        
+                        messages.error(request, f"Detalle del error: {error_msg}")
+                        
+                        # Si hay múltiples errores, agregar una nota
+                        if len(resultados['errors']) > 1:
+                            messages.info(request, f"Hay {len(resultados['errors'])-1} errores adicionales. Revise los logs para más detalles.")
+                    
+                    # Registrar información detallada en logs
+                    logger.error(f"Errores en ejecución SQL: {len(resultados['errors'])} de {resultados['total']} sentencias fallaron.")
+                    for i, error in enumerate(resultados['errors'][:5]):  # Limitamos a los primeros 5 errores
+                        logger.error(f"Error #{i+1}: {error['error']} en sentencia: {error['statement']}")
+                        if 'sugerencia' in error:
+                            logger.error(f"  Sugerencia: {error['sugerencia']}")
+                    
+                    # Guardar información de errores en la sesión para mostrar en la página
+                    request.session['sql_errors'] = [
+                        {
+                            'error': e['error'],
+                            'statement': e['statement'],
+                            'sugerencia': e.get('sugerencia', '')
+                        } for e in resultados['errors'][:10]  # Limitamos a 10 errores
+                    ]
+                    
+                    return redirect('subir_sql')
+                
+                # Guardar tablas creadas en la sesión
+                if resultados['tables_created']:
+                    request.session['created_tables'] = resultados['tables_created']
+                else:
+                    # Si no detectamos tablas creadas específicamente, obtener todas las tablas
+                    tablas_query = """
+                    SELECT TABLE_NAME 
+                    FROM INFORMATION_SCHEMA.TABLES 
+                    WHERE TABLE_TYPE = 'BASE TABLE' 
+                    AND TABLE_CATALOG = DB_NAME()
+                    """
+                    tablas = pd.read_sql(tablas_query, engine)['TABLE_NAME'].tolist()
+                    request.session['created_tables'] = tablas
+                
                 request.session['source_type'] = 'sql'
                 request.session['wizard_step'] = 2
-                messages.success(request, "Archivo .sql importado correctamente.")
-                # antes: redirect('seleccionar_tablas')
+                
+                # Mensaje de éxito
+                messages.success(request, f"Archivo SQL importado correctamente. {resultados['success']} sentencias ejecutadas.")
+                if resultados['tables_created']:
+                    messages.info(request, f"Tablas creadas: {', '.join(resultados['tables_created'][:5])}" + 
+                               ("... y más" if len(resultados['tables_created']) > 5 else ""))
+                
                 return redirect('seleccionar_datos')
+                
             except Exception as e:
-                messages.error(request, f"Error al importar el archivo SQL: {str(e)}")
+                messages.error(request, f"Error al procesar el archivo SQL: {str(e)}")
+                logger.exception("Error en subir_sql")
                 return redirect('subir_sql')
+                
     return render(request, "archivos/subir_sql.html")
 
 
@@ -968,8 +1089,15 @@ def subir_sql(request):
 def tabla_existe(engine, tabla):
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(f"SHOW TABLES LIKE '{tabla}'"))
-            return result.first() is not None
+            # Usar sintaxis SQL Server para verificar existencia de tabla
+            query = """
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_NAME = ? 
+            AND TABLE_CATALOG = DB_NAME()
+            """
+            result = conn.execute(text(query), (tabla,))
+            return result.scalar() > 0
     except Exception:
         return False
     
@@ -1049,16 +1177,23 @@ def preview_sql_estructura(request):
                                 created_temp_tables.append(tabla_match.group(1))
                     except Exception as e:
                         print(f"Error ejecutando: {stmt[:100]}... | {str(e)}")
-            
-            # Procesar cada tabla original detectada
+              # Procesar cada tabla original detectada
             for tabla in tablas_encontradas:
                 temp_tabla = f"{prefix}{tabla}"
                 tabla_info = {'nombre': tabla, 'columnas': [], 'columnas_info': [], 'preview': []}
                 
                 try:
-                    # Obtener columnas
+                    # Obtener columnas usando sintaxis SQL Server
                     with engine.begin() as conn:
-                        result = conn.execute(text(f"SHOW COLUMNS FROM `{temp_tabla}`"))
+                        # Usar INFORMATION_SCHEMA en lugar de SHOW COLUMNS
+                        query = """
+                        SELECT COLUMN_NAME, DATA_TYPE 
+                        FROM INFORMATION_SCHEMA.COLUMNS 
+                        WHERE TABLE_NAME = ? 
+                        AND TABLE_CATALOG = DB_NAME()
+                        ORDER BY ORDINAL_POSITION
+                        """
+                        result = conn.execute(text(query), (temp_tabla,))
                         columns_info = result.fetchall()
                         
                         for col_info in columns_info:
@@ -1070,10 +1205,9 @@ def preview_sql_estructura(request):
                                 'tipo': col_type
                             })
                     
-                    # Obtener datos de muestra (primeras 5 filas)
-                    df = pd.read_sql(f"SELECT * FROM `{temp_tabla}` LIMIT 5", engine)
-                    
-                    # Convertir a lista para JSON
+                    # Obtener datos de muestra (primeras 5 filas) - usar TOP en lugar de LIMIT
+                    df = pd.read_sql(f"SELECT TOP 5 * FROM [{temp_tabla}]", engine)
+                      # Convertir a lista para JSON
                     tabla_info['preview'] = df.values.tolist()
                     
                 except Exception as e:
@@ -1090,7 +1224,7 @@ def preview_sql_estructura(request):
                 with engine.begin() as conn:
                     for tabla in created_temp_tables:
                         try:
-                            conn.execute(text(f"DROP TABLE IF EXISTS `{tabla}`"))
+                            conn.execute(text(f"DROP TABLE IF EXISTS [{tabla}]"))
                         except:
                             pass
             except:
@@ -1135,6 +1269,7 @@ def preview_tabla(request):
     tabla = request.GET.get('tabla')
     if not tabla:
         return JsonResponse({'ok': False, 'error': 'Tabla requerida'})
+    
     engine_url = request.session.get('engine_url')
     source_type = request.session.get('source_type')
     temp_file = request.session.get('temp_file')
@@ -1159,7 +1294,7 @@ def preview_tabla(request):
                 return JsonResponse({'ok': False, 'error': 'Sin conexión'})
             engine = create_engine(engine_url)
             safe = re.sub(r'[^A-Za-z0-9_]', '', tabla)
-            df = pd.read_sql(f"SELECT * FROM `{safe}` LIMIT {sample_rows}", engine)
+            df = pd.read_sql(f"SELECT TOP {sample_rows} * FROM [{safe}]", engine)
         elif source_type == 'sql_script':
             # Para scripts SQL, vamos a crear tablas temporales con prefijo en lugar de schema temporal
             if not engine_url:
@@ -1193,8 +1328,7 @@ def preview_tabla(request):
                                 tabla_match = re.search(r'(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?`?(\w+)`?', stmt)
                                 if tabla_match:
                                     created_tables.append(tabla_match.group(1))
-                        except Exception:
-                            pass  # Ignoramos errores individuales
+                        except Exception:                            pass  # Ignoramos errores individuales
                 
                 # Ahora lee la tabla específica con el prefijo
                 temp_tabla = f"{prefix}{tabla}"
@@ -1203,7 +1337,7 @@ def preview_tabla(request):
                     with engine.begin() as conn:
                         result = conn.execute(text(
                             f"SELECT COUNT(*) FROM information_schema.tables "
-                            f"WHERE table_schema = DATABASE() AND table_name = '{temp_tabla}'"
+                            f"WHERE table_catalog = DB_NAME() AND table_name = '{temp_tabla}'"
                         ))
                         if result.scalar() == 0:
                             return JsonResponse({
@@ -1211,10 +1345,8 @@ def preview_tabla(request):
                                 'columnas': [], 
                                 'data': [],
                                 'warning': 'La tabla parece no existir o está vacía'
-                            })
-                    
-                    # Intenta leer la tabla
-                    df = pd.read_sql(f"SELECT * FROM `{temp_tabla}` LIMIT {sample_rows}", engine)
+                            })                    # Intenta leer la tabla
+                    df = pd.read_sql(f"SELECT TOP {sample_rows} * FROM [{temp_tabla}]", engine)
                 except Exception:
                     # Si falla, devuelve estructura vacía
                     return JsonResponse({
@@ -1228,7 +1360,7 @@ def preview_tabla(request):
                     with engine.begin() as conn:
                         for tabla_tmp in created_tables:
                             try:
-                                conn.execute(text(f"DROP TABLE IF EXISTS `{tabla_tmp}`"))
+                                conn.execute(text(f"DROP TABLE IF EXISTS [{tabla_tmp}]"))
                             except:
                                 pass
             except Exception as e:
@@ -1268,6 +1400,7 @@ def preview_tabla(request):
         return JsonResponse({'ok': False, 'error': 'Fuente no inicializada'})
 
     import pandas as pd
+    from .sqlserver_utils import read_sql_safe, table_exists
     sample_rows = 25
     cols = []
     data = []
@@ -1282,31 +1415,42 @@ def preview_tabla(request):
         elif source_type == 'sql':
             if not engine_url:
                 return JsonResponse({'ok': False, 'error': 'Sin conexión'})
+            
+            # Usar conexión segura para SQL Server
             engine = create_engine(engine_url)
             safe = re.sub(r'[^A-Za-z0-9_]', '', tabla)
-            df = pd.read_sql(f"SELECT * FROM `{safe}` LIMIT {sample_rows}", engine)
+            
+            # Verificar si la tabla existe primero
+            if not table_exists(safe, engine):
+                return JsonResponse({'ok': False, 'error': f'La tabla [{safe}] no existe en la base de datos.'})
+                
+            # Usar lectura segura con manejo de errores
+            df = read_sql_safe(f"SELECT TOP {sample_rows} * FROM [{safe}]", engine)
+              # Verificar si hubo un error en la consulta
+            if isinstance(df, pd.DataFrame) and 'error' in df.columns and len(df) == 1:
+                return JsonResponse({'ok': False, 'error': f"Error en consulta: {df['error'][0]}"})
+
         elif source_type == 'sql_script':
-            # Para scripts SQL, necesitamos crear schema temporal y ejecutar ahí
+            # Para scripts SQL, vamos a crear tablas temporales con prefijo en lugar de schema temporal
             if not engine_url:
                 return JsonResponse({'ok': False, 'error': 'Sin conexión'})
             
             script = request.session.get('sql_script', '')
             if not script:
                 return JsonResponse({'ok': False, 'error': 'Script SQL no disponible'})
-            
-            # Crea schema temporal único para preview
+              # Crea schema temporal único para preview
             import uuid
             temp_schema = f"__preview_{uuid.uuid4().hex[:8]}"
             engine = create_engine(engine_url)
-            
             try:
                 with engine.begin() as conn:
-                    conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS `{temp_schema}`"))
+                    # SQL Server usa sintaxis diferente para crear schemas
+                    conn.execute(text(f"IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '{temp_schema}') BEGIN EXEC('CREATE SCHEMA [{temp_schema}]') END"))
                     
                     # Modifica el script para crear tablas en schema temporal
                     def _reemplazar_tabla(m):
                         nombre_tabla = m.group(2)
-                        return f"{m.group(1)} `{temp_schema}`.`{nombre_tabla}`"
+                        return f"{m.group(1)} [{temp_schema}].[{nombre_tabla}]"
                     
                     script_mod = re.sub(r'(?i)\b(CREATE\s+TABLE|INSERT\s+INTO)\s+`?([A-Za-z0-9_]+)`?',
                                         _reemplazar_tabla, script)
@@ -1317,24 +1461,22 @@ def preview_tabla(request):
                             conn.execute(text(stmt))
                         except Exception:
                             pass  # Ignoramos errores individuales
-                
-                # Ahora lee la tabla específica desde el schema temporal
+                  # Ahora lee la tabla específica desde el schema temporal
                 safe_tabla = re.sub(r'[^A-Za-z0-9_]', '', tabla)
                 try:
-                    # Intenta leer la tabla
-                    df = pd.read_sql(f"SELECT * FROM `{temp_schema}`.`{safe_tabla}` LIMIT {sample_rows}", engine)
+                    # Intenta leer la tabla - SQL Server usa TOP en lugar de LIMIT
+                    df = pd.read_sql(f"SELECT TOP {sample_rows} * FROM [{temp_schema}].[{safe_tabla}]", engine)
                 except Exception:
                     # Si falla, devuelve estructura vacía
                     return JsonResponse({
                         'ok': True, 
                         'columnas': [], 
                         'data': [],
-                        'warning': 'La tabla parece no existir o está vacía'
-                    })
+                        'warning': 'La tabla parece no existir o está vacía'                    })
                 finally:
-                    # Siempre limpia el schema temporal
+                    # Siempre limpia el schema temporal - SQL Server
                     with engine.begin() as conn:
-                        conn.execute(text(f"DROP SCHEMA IF EXISTS `{temp_schema}`"))
+                        conn.execute(text(f"DROP SCHEMA IF EXISTS [{temp_schema}]"))
             except Exception as e:
                 return JsonResponse({'ok': False, 'error': f"Error al preparar vista previa: {str(e)}"})
         else:
@@ -1480,11 +1622,10 @@ def seleccionar_datos(request):
                             errores.append({'stmt': stmt[:60], 'error': str(e)})
                             messages.warning(request, f"Error al ejecutar: {e}")
 
-                # Contar filas usando una conexión explícita (SQLAlchemy 2.x)
-                with engine.connect() as conn:
+                # Contar filas usando una conexión explícita (SQLAlchemy 2.x)                with engine.connect() as conn:
                     for t in tablas:
                         try:
-                            result = conn.execute(text(f"SELECT COUNT(*) FROM `{t}`"))
+                            result = conn.execute(text(f"SELECT COUNT(*) FROM [{t}]"))
                             filas = result.scalar() or 0
                             total_filas += filas
                             messages.info(request, f"Tabla '{t}': {filas} filas")
@@ -1553,6 +1694,7 @@ def seleccionar_datos(request):
         if not tablas_sel:
             messages.error(request, "Selecciona al menos una tabla.")
             return redirect('seleccionar_datos')
+        
         source_type = request.session.get('source_type')
         normalizar = bool(request.POST.get('aplicar_normalizacion'))
         procesadas = 0
@@ -1563,24 +1705,25 @@ def seleccionar_datos(request):
             if not script:
                 messages.error(request, "Script no disponible en sesión.")
                 return redirect('seleccionar_datos')
+            
             temp_schema = f"__tmp_{uuid.uuid4().hex[:8]}"
             try:
                 with engine.begin() as conn:
-                    conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS `{temp_schema}`"))
+                    # SQL Server usa sintaxis diferente para crear schemas
+                    conn.execute(text(f"IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '{temp_schema}') BEGIN EXEC('CREATE SCHEMA [{temp_schema}]') END"))
                     # Reescribir CREATE/INSERT apuntando al schema temporal
                     def _reemplazar_tabla(m):
                         nombre_tabla = m.group(2)
-                        return f"{m.group(1)} `{temp_schema}`.`{nombre_tabla}`"
+                        return f"{m.group(1)} [{temp_schema}].[{nombre_tabla}]"
                     script_mod = re.sub(r'(?i)\b(CREATE\s+TABLE|INSERT\s+INTO)\s+`?([A-Za-z0-9_]+)`?',
                                         _reemplazar_tabla, script)
                     for stmt in [s.strip() for s in script_mod.split(';') if s.strip()]:
                         conn.execute(text(stmt))
             except Exception as e:
-                messages.error(request, f"Fallo ejecutando script: {e}")
-                # Intentar limpiar
+                messages.error(request, f"Fallo ejecutando script: {e}")                # Intentar limpiar
                 with engine.begin() as c:
                     try:
-                        c.execute(text(f"DROP SCHEMA IF EXISTS `{temp_schema}`"))
+                        c.execute(text(f"DROP SCHEMA IF EXISTS [{temp_schema}]"))
                     except:
                         pass
                 return redirect('seleccionar_datos')
@@ -1588,9 +1731,7 @@ def seleccionar_datos(request):
         for tabla in tablas_sel:
             cols_sel = request.POST.getlist(f'columnas_{tabla}')
             if not cols_sel:
-                continue
-
-            # Cargar DataFrame
+                continue            # Cargar DataFrame
             if source_type == 'excel':
                 df_full = pd.read_excel(request.session['temp_file'], sheet_name=tabla, dtype=object)
             elif source_type == 'csv':
@@ -1599,8 +1740,8 @@ def seleccionar_datos(request):
                 # Leer de schema temporal
                 safe = re.sub(r'[^A-Za-z0-9_]', '', tabla)
                 try:
-                    select_cols = ", ".join([f"`{c}`" for c in cols_sel])
-                    df_full = pd.read_sql(f"SELECT {select_cols} FROM `{temp_schema}`.`{safe}`", engine)
+                    select_cols = ", ".join([f"[{c}]" for c in cols_sel])
+                    df_full = pd.read_sql(f"SELECT {select_cols} FROM [{temp_schema}].[{safe}]", engine)
                 except Exception:
                     df_full = pd.DataFrame(columns=cols_sel)
             else:
@@ -1648,11 +1789,10 @@ def seleccionar_datos(request):
             except Exception as e:
                 messages.error(request, f"Error guardando {final_name}: {e}")
 
-        # Limpiar schema temporal si hubo script
-        if source_type == 'sql_script':
+        # Limpiar schema temporal si hubo script        if source_type == 'sql_script':
             with engine.begin() as conn:
                 try:
-                    conn.execute(text(f"DROP SCHEMA `{temp_schema}`"))
+                    conn.execute(text(f"DROP SCHEMA [{temp_schema}]"))
                 except:
                     pass
 
@@ -1686,7 +1826,14 @@ def seleccionar_datos(request):
 
 def _extraer_tablas_creadas(engine):
     try:
-        return pd.read_sql("SHOW TABLES", engine).iloc[:, 0].tolist()
+        # Usar sintaxis SQL Server en lugar de MySQL
+        query = """
+        SELECT TABLE_NAME 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_TYPE = 'BASE TABLE' 
+        AND TABLE_CATALOG = DB_NAME()
+        """
+        return pd.read_sql(query, engine)['TABLE_NAME'].tolist()
     except Exception:
         return []
 
@@ -1782,9 +1929,8 @@ def ejecutar_proceso(request, proceso_id):
                     tabla_origen = m.get('origen')
                     tabla_destino = m.get('destino', tabla_origen)
                     modo = m.get('modo', 'replace')
-                if not tabla_origen:
-                    continue
-                df = pd.read_sql(f"SELECT * FROM `{tabla_origen}`", engine)
+                if not tabla_origen:                    continue
+                df = pd.read_sql(f"SELECT * FROM [{tabla_origen}]", engine)
                 df.to_sql(tabla_destino, engine, if_exists=('replace' if modo=='replace' else 'append'), index=False)
                 total_filas += len(df)
         else:
@@ -1817,3 +1963,139 @@ def _leer_origen_simple(tipo, archivo, hoja=None):
     except Exception:
         return None
     return None
+
+
+def preview_sql_conversion(request):
+    """
+    Vista AJAX para previsualizar la conversión de SQL de MySQL a SQL Server
+    sin ejecutar el script.
+    """
+    from django.http import JsonResponse
+    from .mysql_to_sqlserver import convert_mysql_to_sqlserver
+    from .sql_compatibility import analizar_compatibilidad_mysql_sqlserver
+    import json
+    
+    if request.method == 'POST' and request.FILES.get('archivo_sql'):
+        try:
+            archivo_sql = request.FILES['archivo_sql']
+            archivo_sql.seek(0)
+            sql_original = archivo_sql.read().decode('utf-8', errors='ignore')
+            
+            # Realizar análisis de compatibilidad
+            reporte_compatibilidad = analizar_compatibilidad_mysql_sqlserver(sql_original)
+            
+            # Convertir SQL de MySQL a formato SQL Server
+            sql_convertido = convert_mysql_to_sqlserver(sql_original)
+            
+            # Limitar tamaño para respuesta AJAX
+            max_length = 50000  # Caracteres máximos para evitar respuestas muy grandes
+            sql_original_truncado = sql_original[:max_length] + ("..." if len(sql_original) > max_length else "")
+            sql_convertido_truncado = sql_convertido[:max_length] + ("..." if len(sql_convertido) > max_length else "")
+            
+            # Generar resumen de cambios realizados
+            cambios = []
+            if '`' in sql_original:
+                cambios.append("Reemplazo de comillas invertidas (`) por corchetes ([]) para identificadores")
+            if 'AUTO_INCREMENT' in sql_original:
+                cambios.append("Conversión de AUTO_INCREMENT a IDENTITY(1,1)")
+            if 'ENGINE=' in sql_original:
+                cambios.append("Eliminación de especificaciones de motor (ENGINE=InnoDB)")
+            if 'int(' in sql_original:
+                cambios.append("Ajuste de tipos de datos (int(N) → int)")
+            if 'varchar(' in sql_original:
+                cambios.append("Conversión de varchar a nvarchar para soporte Unicode")
+            if 'START TRANSACTION' in sql_original:
+                cambios.append("Ajuste de sintaxis de transacciones (START TRANSACTION → BEGIN TRANSACTION)")
+            
+            # Incluir advertencias del análisis de compatibilidad
+            nivel_compatibilidad = reporte_compatibilidad['nivel_compatibilidad']
+            mensajes_compatibilidad = {
+                'alto': 'El script parece ser altamente compatible con SQL Server.',
+                'medio': 'El script tiene algunos problemas de compatibilidad que pueden requerir ajustes manuales.',
+                'bajo': 'El script tiene problemas graves de compatibilidad que requerirán intervención manual.'
+            }
+            
+            # Crear respuesta para el cliente
+            respuesta = {
+                'success': True,
+                'sql_original': sql_original_truncado,
+                'sql_convertido': sql_convertido_truncado,
+                'cambios': cambios,
+                'compatibilidad': {
+                    'nivel': nivel_compatibilidad,
+                    'mensaje': mensajes_compatibilidad[nivel_compatibilidad],
+                    'problemas': reporte_compatibilidad['total_problemas'],
+                    'recomendaciones': reporte_compatibilidad['recomendaciones']
+                }
+            }
+            
+            # Si hay problemas específicos, incluirlos en la respuesta
+            if reporte_compatibilidad['problemas']:
+                respuesta['compatibilidad']['detalles'] = reporte_compatibilidad['problemas']
+            
+            return JsonResponse(respuesta)
+            
+        except Exception as e:
+            return JsonResponse({
+                'success': False,
+                'error': str(e)
+            }, status=400)
+    
+    return JsonResponse({
+        'success': False,
+        'error': 'Método no permitido o archivo no proporcionado'
+    }, status=400)
+    """
+    Vista AJAX para previsualizar la conversión de SQL de MySQL a SQL Server
+    sin ejecutar el script.
+    """
+    from django.http import JsonResponse
+    from .mysql_to_sqlserver import convert_mysql_to_sqlserver
+    import json
+    
+    if request.method == 'POST' and request.FILES.get('archivo_sql'):
+        try:
+            archivo_sql = request.FILES['archivo_sql']
+            archivo_sql.seek(0)
+            sql_original = archivo_sql.read().decode('utf-8', errors='ignore')
+            
+            # Convertir SQL de MySQL a formato SQL Server
+            sql_convertido = convert_mysql_to_sqlserver(sql_original)
+            
+            # Limitar tamaño para respuesta AJAX
+            max_length = 50000  # Caracteres máximos para evitar respuestas muy grandes
+            sql_original_truncado = sql_original[:max_length] + ("..." if len(sql_original) > max_length else "")
+            sql_convertido_truncado = sql_convertido[:max_length] + ("..." if len(sql_convertido) > max_length else "")
+            
+            # Generar resumen de cambios realizados
+            cambios = []
+            if '`' in sql_original:
+                cambios.append("Reemplazo de comillas invertidas (`) por corchetes ([]) para identificadores")
+            if 'AUTO_INCREMENT' in sql_original:
+                cambios.append("Conversión de AUTO_INCREMENT a IDENTITY(1,1)")
+            if 'ENGINE=' in sql_original:
+                cambios.append("Eliminación de especificaciones de motor (ENGINE=InnoDB)")
+            if 'int(' in sql_original:
+                cambios.append("Ajuste de tipos de datos (int(N) → int)")
+            if 'varchar(' in sql_original:
+                cambios.append("Conversión de varchar a nvarchar para soporte Unicode")
+            if 'START TRANSACTION' in sql_original:
+                cambios.append("Ajuste de sintaxis de transacciones (START TRANSACTION → BEGIN TRANSACTION)")
+            
+            return JsonResponse({
+                'success': True,
+                'sql_original': sql_original_truncado,
+                'sql_convertido': sql_convertido_truncado,
+                'cambios': cambios
+            })
+            
+        except Exception as e:
+            return JsonResponse({
+                'success': False,
+                'error': str(e)
+            }, status=400)
+    
+    return JsonResponse({
+        'success': False,
+        'error': 'Método no permitido o archivo no proporcionado'
+    }, status=400)

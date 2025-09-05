@@ -1,17 +1,268 @@
 {% extends 'archivos/base.html' %}
+{% load static %}
 {% block title %}Subir archivo SQL{% endblock %}
+
+{% block extra_css %}
+<style>
+    .sql-preview {
+        max-height: 300px;
+        overflow-y: auto;
+        background-color: #f8f9fa;
+        border: 1px solid #ced4da;
+        border-radius: 0.25rem;
+        padding: 0.75rem;
+        font-family: monospace;
+        font-size: 0.9rem;
+        white-space: pre-wrap;
+        margin-bottom: 1rem;
+    }
+    .conversion-container {
+        margin-top: 2rem;
+        display: none;
+    }
+    .nav-tabs {
+        margin-bottom: 1rem;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container mt-4">
-    <h3>Subir archivo .sql para importar tablas</h3>
-    <form method="post" enctype="multipart/form-data">
-        {% csrf_token %}
-        <div class="mb-3">
-            <label for="archivo_sql" class="form-label">Archivo .sql</label>
-            <input type="file" name="archivo_sql" id="archivo_sql" class="form-control" accept=".sql" required>
+    <div class="row">
+        <div class="col-md-8 offset-md-2">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h3 class="mb-0">
+                        <i class="bi bi-file-earmark-code me-2"></i>
+                        Subir archivo SQL
+                    </h3>
+                </div>
+                <div class="card-body">                <div class="alert alert-info">
+                        <i class="bi bi-info-circle-fill me-2"></i>
+                        Esta herramienta convierte automáticamente archivos SQL de MySQL a SQL Server. 
+                        Se ajustarán sintaxis, tipos de datos y estructuras para compatibilidad.
+                    </div>
+                    
+                    {% if request.session.sql_errors %}
+                    <div class="alert alert-danger">
+                        <h5><i class="bi bi-exclamation-triangle-fill me-2"></i>Se encontraron errores en el script SQL</h5>
+                        <p>El script SQL contiene errores que impidieron su ejecución completa. A continuación se muestran detalles:</p>
+                        
+                        <div class="accordion mt-2" id="erroresAccordion">
+                            {% for error in request.session.sql_errors %}
+                            <div class="accordion-item">
+                                <h2 class="accordion-header">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
+                                            data-bs-target="#error{{ forloop.counter }}">
+                                        Error #{{ forloop.counter }}
+                                    </button>
+                                </h2>
+                                <div id="error{{ forloop.counter }}" class="accordion-collapse collapse" data-bs-parent="#erroresAccordion">
+                                    <div class="accordion-body">
+                                        <p><strong>Mensaje:</strong> {{ error.error }}</p>
+                                        {% if error.sugerencia %}
+                                        <p><strong>Sugerencia:</strong> {{ error.sugerencia }}</p>
+                                        {% endif %}
+                                        <p><strong>Sentencia SQL:</strong></p>
+                                        <pre class="bg-light p-2"><code>{{ error.statement }}</code></pre>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    
+                    <form method="post" enctype="multipart/form-data" id="sqlForm">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="archivo_sql" class="form-label fw-bold">Archivo SQL</label>
+                            <input type="file" name="archivo_sql" id="archivo_sql" class="form-control" accept=".sql" required>
+                            <div class="form-text">Seleccione un archivo SQL de MySQL para convertir y ejecutar en SQL Server</div>
+                        </div>
+                        
+                        <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                            <button type="button" id="btnPreview" class="btn btn-outline-primary me-md-2" disabled>
+                                <i class="bi bi-eye"></i> Vista previa
+                            </button>
+                            <button type="submit" class="btn btn-success">
+                                <i class="bi bi-upload"></i> Subir y ejecutar
+                            </button>
+                        </div>
+                    </form>
+                    
+                    <!-- Contenedor de vista previa de conversión -->
+                    <div class="conversion-container" id="previewContainer">
+                        <hr>
+                        <h4><i class="bi bi-arrow-repeat me-2"></i>Vista previa de conversión</h4>
+                        
+                        <ul class="nav nav-tabs" id="sqlTabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="original-tab" data-bs-toggle="tab" data-bs-target="#original" type="button" role="tab" aria-selected="true">SQL Original</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="converted-tab" data-bs-toggle="tab" data-bs-target="#converted" type="button" role="tab" aria-selected="false">SQL Convertido</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="diff-tab" data-bs-toggle="tab" data-bs-target="#diff" type="button" role="tab" aria-selected="false">Diferencias</button>
+                            </li>
+                        </ul>
+                        
+                        <div class="tab-content" id="sqlTabsContent">
+                            <div class="tab-pane fade show active" id="original" role="tabpanel">
+                                <div class="sql-preview" id="originalSql"></div>
+                            </div>
+                            <div class="tab-pane fade" id="converted" role="tabpanel">
+                                <div class="sql-preview" id="convertedSql"></div>
+                            </div>
+                            <div class="tab-pane fade" id="diff" role="tabpanel">
+                                <div class="sql-preview" id="diffView">
+                                    <p class="text-muted">La vista de diferencias estará disponible después de procesar el archivo.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
-        <button type="submit" class="btn btn-success">
-            <i class="bi bi-upload"></i> Subir y analizar
-        </button>
-    </form>
+    </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const fileInput = document.getElementById('archivo_sql');
+        const previewBtn = document.getElementById('btnPreview');
+        const previewContainer = document.getElementById('previewContainer');
+        const originalSql = document.getElementById('originalSql');
+        const convertedSql = document.getElementById('convertedSql');
+        const diffView = document.getElementById('diffView');
+        
+        // Habilitar/deshabilitar botón de vista previa
+        fileInput.addEventListener('change', function() {
+            previewBtn.disabled = !fileInput.files.length;
+            
+            // Ocultar vista previa cuando se selecciona un nuevo archivo
+            if (previewContainer.style.display === 'block') {
+                previewContainer.style.display = 'none';
+            }
+        });
+        
+        // Manejar vista previa con llamada AJAX
+        previewBtn.addEventListener('click', function() {
+            if (!fileInput.files.length) return;
+            
+            // Mostrar indicadores de carga
+            originalSql.innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"></div><p>Cargando...</p></div>';
+            convertedSql.innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"></div><p>Procesando conversión...</p></div>';
+            diffView.innerHTML = '<div class="text-center"><p class="text-muted">Generando vista de diferencias...</p></div>';
+            
+            // Mostrar contenedor de vista previa
+            previewContainer.style.display = 'block';
+            
+            // Preparar datos para enviar
+            const formData = new FormData();
+            formData.append('archivo_sql', fileInput.files[0]);
+            
+            // Obtener el token CSRF
+            const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+            
+            // Realizar la solicitud AJAX
+            fetch('{% url "preview_sql_conversion" %}', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': csrfToken
+                },
+                credentials: 'same-origin'
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Error en la solicitud');
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // Mostrar SQL original
+                    originalSql.innerHTML = `<pre>${escapeHtml(data.sql_original)}</pre>`;
+                    
+                    // Mostrar SQL convertido
+                    convertedSql.innerHTML = `<pre>${escapeHtml(data.sql_convertido)}</pre>`;
+                      // Mostrar resumen de cambios y compatibilidad
+                    let diffHtml = '';
+                    
+                    // Primero mostrar información de compatibilidad si existe
+                    if (data.compatibilidad) {
+                        const nivelClase = {
+                            'alto': 'success',
+                            'medio': 'warning',
+                            'bajo': 'danger'
+                        };
+                        const nivel = data.compatibilidad.nivel;
+                        
+                        diffHtml += `<div class="alert alert-${nivelClase[nivel]} mb-3">`;
+                        diffHtml += `<h5><i class="bi bi-info-circle me-2"></i>Compatibilidad: ${nivel.toUpperCase()}</h5>`;
+                        diffHtml += `<p>${data.compatibilidad.mensaje}</p>`;
+                        
+                        // Mostrar recomendaciones si hay problemas
+                        if (data.compatibilidad.problemas > 0) {
+                            diffHtml += '<div class="mt-2">';
+                            diffHtml += `<p><strong>Se detectaron ${data.compatibilidad.problemas} problemas potenciales.</strong></p>`;
+                            
+                            if (data.compatibilidad.recomendaciones && data.compatibilidad.recomendaciones.length > 0) {
+                                diffHtml += '<p><strong>Recomendaciones:</strong></p>';
+                                diffHtml += '<ul>';
+                                data.compatibilidad.recomendaciones.forEach(rec => {
+                                    diffHtml += `<li>${rec}</li>`;
+                                });
+                                diffHtml += '</ul>';
+                            }
+                            diffHtml += '</div>';
+                        }
+                        
+                        diffHtml += '</div>';
+                    }
+                    
+                    // Luego mostrar cambios realizados
+                    if (data.cambios && data.cambios.length > 0) {
+                        diffHtml += '<div class="alert alert-info">';
+                        diffHtml += '<h5><i class="bi bi-gear me-2"></i>Cambios aplicados en la conversión:</h5>';
+                        diffHtml += '<ul>';
+                        data.cambios.forEach(cambio => {
+                            diffHtml += `<li>${cambio}</li>`;
+                        });
+                        diffHtml += '</ul></div>';
+                    } else {
+                        diffHtml += '<div class="alert alert-secondary">No se detectaron cambios significativos en la sintaxis.</div>';
+                    }
+                    
+                    diffView.innerHTML = diffHtml;
+                } else {
+                    // Mostrar error
+                    originalSql.innerHTML = '<div class="alert alert-danger">Error al procesar el archivo SQL</div>';
+                    convertedSql.innerHTML = '<div class="alert alert-danger">No se pudo completar la conversión</div>';
+                    diffView.innerHTML = '';
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                originalSql.innerHTML = '<div class="alert alert-danger">Error al procesar la solicitud</div>';
+                convertedSql.innerHTML = '<div class="alert alert-danger">Error: ' + error.message + '</div>';
+                diffView.innerHTML = '';
+            });
+        });
+        
+        // Función auxiliar para escapar HTML
+        function escapeHtml(unsafe) {
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    });
+</script>
 {% endblock %}
