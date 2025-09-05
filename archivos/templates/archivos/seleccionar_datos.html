@@ -1,6 +1,8 @@
 {% extends 'archivos/base.html' %}
 {% block title %}Importar Datos{% endblock %}
 {% block content %}
+{% load static %}
+
 <div class="container mt-4">
 
   {% if messages %}
@@ -39,17 +41,29 @@
       <div id="origen_compartido" class="{% if not request.POST.modo_origen or request.POST.modo_origen == 'local' %}d-none{% endif %}">
         <div class="mb-2">
           <label class="form-label">Ruta carpeta compartida (UNC)</label>
-          <input type="text" class="form-control form-control-sm" name="ruta_compartida"
-                 placeholder="\\SERVIDOR\\recurso\\subcarpeta"
-                 value="{{ request.POST.ruta_compartida }}">
+          <input type="text" class="form-control form-control-sm" name="ruta_compartida" id="ruta_compartida"
+                placeholder="\\SERVIDOR\\recurso\\subcarpeta"
+                value="{{ request.POST.ruta_compartida }}">
         </div>
+                {% comment %} Previsualizar archivo {% endcomment %}
+      <div class="mt-2 mb-3">
+        <button type="button" class="btn btn-info" id="btn_previsualizar">
+          <i class="bi bi-eye"></i> Previsualizar Archivo SQL
+        </button>
+        <div class="mt-2 alert alert-info" id="cargando" style="display:none;">
+          <i class="bi bi-hourglass-split"></i> Cargando estructura del archivo SQL...
+        </div>
+        <div class="mt-2" id="preview_result"></div>
+      </div>
+    </div>
         <div class="mb-3">
           <label class="form-label">Nombre de archivo (incluye extensión)</label>
-          <input type="text" class="form-control form-control-sm" name="nombre_archivo"
-                 placeholder="datos.xlsx" value="{{ request.POST.nombre_archivo }}">
+          <input type="text" class="form-control form-control-sm" name="nombre_archivo" id="nombre_archivo"
+                placeholder="datos.xlsx" value="{{ request.POST.nombre_archivo }}">
           <small class="text-muted">Se combinará: ruta + nombre_archivo</small>
         </div>
-      </div>
+
+
 
       <div class="form-check mb-2">
         <input class="form-check-input" type="checkbox" id="gp" name="guardar_proceso"
@@ -66,14 +80,170 @@
       <button class="btn btn-primary" name="accion" value="subir_archivo">Continuar</button>
     </form>
 
-    <script>
-      function toggleOrigen(){
-        const local = document.getElementById('modo_local').checked;
-        document.getElementById('origen_local').classList.toggle('d-none', !local);
-        document.getElementById('origen_compartido').classList.toggle('d-none', local);
-      }
-      document.addEventListener('DOMContentLoaded', toggleOrigen);
-    </script>
+<!-- Donde está actualmente el script del botón de previsualizar -->
+<!-- Añade esto al final del archivo, antes del cierre del bloque content -->
+<script>
+  // Una única función toggleOrigen
+  function toggleOrigen() {
+    const local = document.getElementById('modo_local').checked;
+    document.getElementById('origen_local').classList.toggle('d-none', !local);
+    document.getElementById('origen_compartido').classList.toggle('d-none', local);
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    // Inicializa estado de visibilidad
+    toggleOrigen();
+    
+    // Conecta el evento del botón previsualizar
+    const btnPrevisualizar = document.getElementById('btn_previsualizar');
+    const cargando = document.getElementById('cargando');
+    const previewResult = document.getElementById('preview_result');
+    
+    if (btnPrevisualizar) {
+      btnPrevisualizar.addEventListener('click', function() {
+        const ruta = document.getElementById('ruta_compartida').value.trim();
+        const archivo = document.getElementById('nombre_archivo').value.trim();
+        
+        if (!ruta || !archivo) {
+          previewResult.innerHTML = '<div class="alert alert-warning">Por favor, ingresa la ruta y el nombre del archivo.</div>';
+          return;
+        }
+        
+        if (!archivo.toLowerCase().endsWith('.sql')) {
+          previewResult.innerHTML = '<div class="alert alert-warning">El archivo debe tener extensión .sql</div>';
+          return;
+        }
+        
+        // Mostrar indicador de carga
+        cargando.style.display = 'block';
+        previewResult.innerHTML = '';
+        
+        // Realizar petición AJAX
+        fetch('/api/preview-sql-estructura/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+          },
+          body: JSON.stringify({
+            ruta: ruta,
+            archivo: archivo
+          })
+        })
+        .then(response => response.json())
+        .then(data => {
+          cargando.style.display = 'none';
+          
+          if (!data.ok) {
+            previewResult.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+            return;
+          }
+          
+          if (!data.tablas || data.tablas.length === 0) {
+            previewResult.innerHTML = `<div class="alert alert-warning">No se encontraron tablas en el archivo SQL.</div>`;
+            return;
+          }
+          
+          // Guardar datos en localStorage para uso posterior
+          localStorage.setItem('sql_preview_data', JSON.stringify(data));
+          
+          // Mostrar interfaz de selección de tablas y columnas
+          let html = `
+            <div class="card border-info mb-4">
+              <div class="card-header bg-info text-white">
+                <h5><i class="bi bi-table"></i> Tablas encontradas en el archivo</h5>
+              </div>
+              <div class="card-body">
+                <div class="mb-3">
+                  <strong>${data.tablas.length} tabla(s) detectada(s)</strong>
+                </div>
+                
+                <div class="list-group">`;
+          
+          // Generar un panel para cada tabla
+          data.tablas.forEach((tabla, idx) => {
+            html += `
+              <div class="list-group-item list-group-item-action">
+                <div class="form-check mb-2">
+                  <input class="form-check-input tabla-select" type="checkbox" id="tabla_${idx}" 
+                         name="tablas_seleccionadas" value="${tabla.nombre}" 
+                         onchange="toggleTablaDetalle(${idx})">
+                  <label class="form-check-label fw-bold" for="tabla_${idx}">
+                    ${tabla.nombre}
+                  </label>
+                  ${tabla.columnas && tabla.columnas.length ? 
+                    `<span class="badge bg-info ms-2">${tabla.columnas.length} columna(s)</span>` : ''}
+                </div>
+                
+                <div id="detalle_tabla_${idx}" class="tabla-detalle border-top pt-3 mt-2" style="display: none;">
+                  ${tabla.columnas && tabla.columnas.length ? `
+                    <div class="mb-2">
+                      <button type="button" class="btn btn-sm btn-outline-primary"
+                              onclick="togglePreview(${idx})">
+                        Mostrar/ocultar datos de muestra
+                      </button>
+                    </div>
+                    
+                    <div class="preview-container table-responsive" id="preview_${idx}" style="display: none;">
+                      <table class="table table-sm table-striped table-bordered">
+                        <thead>
+                          <tr>
+                            ${tabla.columnas.map(col => `<th>${col}</th>`).join('')}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${tabla.preview && tabla.preview.map(row => `
+                            <tr>
+                              ${row.map(cell => `<td>${cell === null ? '' : cell}</td>`).join('')}
+                            </tr>
+                          `).join('')}
+                        </tbody>
+                      </table>
+                    </div>
+                  ` : ''}
+                </div>
+              </div>`;
+          });
+          
+          html += `
+                </div>
+              </div>
+            </div>`;
+          
+          previewResult.innerHTML = html;
+        })
+        .catch(error => {
+          cargando.style.display = 'none';
+          previewResult.innerHTML = `<div class="alert alert-danger">Error de comunicación: ${error}</div>`;
+        });
+      });
+    }
+  });
+  
+  // Funciones de utilidad para manejo de la interfaz
+  function toggleTablaDetalle(idx) {
+    const checkbox = document.getElementById(`tabla_${idx}`);
+    const detalle = document.getElementById(`detalle_tabla_${idx}`);
+    
+    if (checkbox.checked) {
+      detalle.style.display = 'block';
+    } else {
+      detalle.style.display = 'none';
+    }
+  }
+  
+  function togglePreview(idx) {
+    const preview = document.getElementById(`preview_${idx}`);
+    preview.style.display = preview.style.display === 'none' ? 'block' : 'none';
+  }
+</script>
+
+
+
+        
+    
+    
+
 
   {% elif step == 2 %}
     <h4>Paso 2: Seleccionar tablas y columnas</h4>
@@ -132,6 +302,11 @@
         {% endfor %}
         <button class="btn btn-primary" name="accion" value="procesar_columnas">Guardar en BD</button>
       </form>
+
+
+    <script src="{% static 'static/js/seleccionar_datos.js' %}"></script>
+
+      
       <script>
         function marcar(state){
           document.querySelectorAll('.tabla-check').forEach(c=>{
@@ -198,6 +373,83 @@
           });
         }
       </script>
+      <script>
+  // Función para mostrar detalles de tabla en modal
+  function mostrarDetallesTabla(tabla) {
+    const data = JSON.parse(localStorage.getItem('sql_preview_data'));
+    const tablaInfo = data.tablas.find(t => t.nombre === tabla);
+    
+    // Modal HTML
+    const modalHTML = `
+      <div class="modal fade" id="detallesTablaModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+          <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+              <h5 class="modal-title"><i class="bi bi-table"></i> Tabla: ${tabla}</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <h6>Columnas:</h6>
+              <div class="table-responsive">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>Nombre</th>
+                      <th>Tipo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${tablaInfo.columnas_info?.map(col => `
+                      <tr>
+                        <td>${col.nombre}</td>
+                        <td>${col.tipo || 'N/A'}</td>
+                      </tr>
+                    `).join('') || '<tr><td colspan="2">Información detallada no disponible</td></tr>'}
+                  </tbody>
+                </table>
+              </div>
+              ${tablaInfo.preview ? `
+                <h6 class="mt-3">Vista previa de datos:</h6>
+                <div class="table-responsive">
+                  <table class="table table-sm table-striped">
+                    <thead>
+                      <tr>
+                        ${tablaInfo.columnas?.map(col => `<th>${col}</th>`).join('') || ''}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${tablaInfo.preview?.map(row => `
+                        <tr>
+                          ${row.map(cell => `<td>${cell === null ? '' : cell}</td>`).join('')}
+                        </tr>
+                      `).join('') || ''}
+                    </tbody>
+                  </table>
+                </div>
+              ` : ''}
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  
+    // Insertar modal en el DOM
+    const modalContainer = document.createElement('div');
+    modalContainer.innerHTML = modalHTML;
+    document.body.appendChild(modalContainer);
+    
+    // Mostrar modal
+    const modal = new bootstrap.Modal(document.getElementById('detallesTablaModal'));
+    modal.show();
+    
+    // Limpiar el DOM cuando se cierre
+    document.getElementById('detallesTablaModal').addEventListener('hidden.bs.modal', function() {
+      document.body.removeChild(modalContainer);
+    });
+  }
+</script>
     {% else %}
       <p>No hay tablas detectadas.</p>
     {% endif %}

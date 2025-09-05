@@ -25,6 +25,7 @@ urlpatterns = [
     path('archivo/<int:archivo_id>/procesar/', views.procesar_archivo_vista, name='procesar_archivo'),
     path('carpetas/<int:carpeta_id>/subir/', views.subir_archivo_a_carpeta, name='subir_archivo'),
     # API
+    path('api/preview-sql-estructura/', views.preview_sql_estructura, name='preview_sql_estructura'),
     path('api/archivo-procesado/<int:procesado_id>/datos/', views.obtener_datos_archivo, name='obtener_datos_archivo'),
     path('carpetas/<int:carpeta_id>/seleccionar/', views.seleccionar_archivos_para_subir, name='seleccionar_archivos'),
     path('confirmar-subida/', views.confirmar_archivos_subir, name='confirmar_archivos_subir'),

@@ -7,10 +7,11 @@ from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import os
-import re
+import re,uuid
 import json
 import humanize
 import base64
+
 from io import BytesIO, StringIO
 from .forms import SubirArchivoForm, CarpetaCompartidaForm
 from .models import *
@@ -979,6 +980,274 @@ def tabla_existe(engine, tabla):
 
 from django.views.decorators.http import require_GET
 
+
+
+@csrf_exempt
+def preview_sql_estructura(request):
+    """API para previsualizar la estructura y datos de un archivo SQL desde carpeta compartida"""
+    if request.method != 'POST':
+        return JsonResponse({'ok': False, 'error': 'Método no permitido'})
+    
+    try:
+        data = json.loads(request.body)
+        ruta = data.get('ruta', '').strip()
+        archivo = data.get('archivo', '').strip()
+        
+        if not ruta or not archivo:
+            return JsonResponse({'ok': False, 'error': 'Ruta y nombre de archivo requeridos'})
+        
+        ruta_completa = os.path.join(ruta, archivo)
+        
+        # Verificar que el archivo existe
+        if not os.path.isfile(ruta_completa):
+            return JsonResponse({'ok': False, 'error': f'No se encuentra el archivo: {ruta_completa}'})
+        
+        # Verificar que es un archivo SQL
+        if not archivo.lower().endswith('.sql'):
+            return JsonResponse({'ok': False, 'error': 'El archivo debe tener extensión .sql'})
+        
+        # Leer el contenido del archivo SQL
+        with open(ruta_completa, 'r', encoding='utf-8', errors='ignore') as f:
+            sql_content = f.read()
+        
+        # Buscar tablas en el script (CREATE TABLE)
+        tabla_pattern = re.compile(r'create\s+table\s+(?:if\s+not\s+exists\s+)?`?([A-Za-z0-9_]+)`?(?:\s*\(|\s+as)', re.IGNORECASE)
+        tablas_encontradas = tabla_pattern.findall(sql_content)
+        tablas_encontradas = sorted(list(dict.fromkeys(tablas_encontradas)))  # Eliminar duplicados
+        
+        # Obtener engine desde sesión
+        engine_url = request.session.get('engine_url')
+        if not engine_url:
+            return JsonResponse({'ok': False, 'error': 'No hay conexión a base de datos'})
+        
+        engine = create_engine(engine_url)
+        
+        # En lugar de usar un schema temporal, usaremos tablas temporales con prefijo
+        prefix = f"__tmp_{uuid.uuid4().hex[:8]}_"
+        
+        resultado_tablas = []
+        created_temp_tables = []
+        
+        try:
+            # Modificar el script para usar tablas temporales con prefijo
+            def _reemplazar_tabla(m):
+                nombre_tabla = m.group(2)
+                return f"{m.group(1)} `{prefix}{nombre_tabla}`"
+            
+            script_mod = re.sub(r'(?i)\b(CREATE\s+TABLE|INSERT\s+INTO)\s+`?([A-Za-z0-9_]+)`?',
+                                _reemplazar_tabla, sql_content)
+            
+            # Ejecutar cada sentencia
+            with engine.begin() as conn:
+                for stmt in [s.strip() for s in script_mod.split(';') if s.strip()]:
+                    try:
+                        conn.execute(text(stmt))
+                        # Capturar nombres de tablas creadas
+                        if re.search(r'(?i)create\s+table', stmt):
+                            tabla_match = re.search(r'(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?`?(\w+)`?', stmt)
+                            if tabla_match:
+                                created_temp_tables.append(tabla_match.group(1))
+                    except Exception as e:
+                        print(f"Error ejecutando: {stmt[:100]}... | {str(e)}")
+            
+            # Procesar cada tabla original detectada
+            for tabla in tablas_encontradas:
+                temp_tabla = f"{prefix}{tabla}"
+                tabla_info = {'nombre': tabla, 'columnas': [], 'columnas_info': [], 'preview': []}
+                
+                try:
+                    # Obtener columnas
+                    with engine.begin() as conn:
+                        result = conn.execute(text(f"SHOW COLUMNS FROM `{temp_tabla}`"))
+                        columns_info = result.fetchall()
+                        
+                        for col_info in columns_info:
+                            col_name = col_info[0]
+                            col_type = col_info[1]
+                            tabla_info['columnas'].append(col_name)
+                            tabla_info['columnas_info'].append({
+                                'nombre': col_name,
+                                'tipo': col_type
+                            })
+                    
+                    # Obtener datos de muestra (primeras 5 filas)
+                    df = pd.read_sql(f"SELECT * FROM `{temp_tabla}` LIMIT 5", engine)
+                    
+                    # Convertir a lista para JSON
+                    tabla_info['preview'] = df.values.tolist()
+                    
+                except Exception as e:
+                    print(f"Error obteniendo datos de {tabla}: {str(e)}")
+                
+                resultado_tablas.append(tabla_info)
+        
+        except Exception as e:
+            return JsonResponse({'ok': False, 'error': f"Error al procesar el script: {str(e)}"})
+        
+        finally:
+            # Limpiar tablas temporales
+            try:
+                with engine.begin() as conn:
+                    for tabla in created_temp_tables:
+                        try:
+                            conn.execute(text(f"DROP TABLE IF EXISTS `{tabla}`"))
+                        except:
+                            pass
+            except:
+                pass
+        
+        # Si no se encontraron tablas con información, buscar tablas insertadas
+        if not any(tabla.get('columnas') for tabla in resultado_tablas):
+            insert_pattern = re.compile(r'insert\s+into\s+`?([A-Za-z0-9_]+)`?', re.IGNORECASE)
+            tablas_insert = insert_pattern.findall(sql_content)
+            tablas_insert = sorted(list(dict.fromkeys(tablas_insert)))  # Eliminar duplicados
+            
+            for tabla in tablas_insert:
+                if not any(t['nombre'] == tabla for t in resultado_tablas):
+                    tabla_info = {'nombre': tabla, 'columnas': [], 'preview': []}
+                    resultado_tablas.append(tabla_info)
+        
+        # Guardar el script y las tablas encontradas en la sesión para usar después
+        request.session['sql_script_preview'] = sql_content
+        request.session['tablas_detectadas'] = [t['nombre'] for t in resultado_tablas]
+        
+        return JsonResponse({
+            'ok': True,
+            'tablas': resultado_tablas,
+            'archivo': archivo,
+            'ruta': ruta
+        })
+    
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': str(e)})
+
+
+
+@csrf_exempt
+def preview_tabla(request):
+    """
+    Devuelve (JSON) columnas y primeras filas de una tabla/hoja seleccionada (paso 2 dinámico).
+    Parámetros:
+      ?tabla=nombre
+    Usa la sesión (source_type, temp_file, engine_url).
+    """
+    from django.http import JsonResponse
+    tabla = request.GET.get('tabla')
+    if not tabla:
+        return JsonResponse({'ok': False, 'error': 'Tabla requerida'})
+    engine_url = request.session.get('engine_url')
+    source_type = request.session.get('source_type')
+    temp_file = request.session.get('temp_file')
+
+    if not source_type:
+        return JsonResponse({'ok': False, 'error': 'Fuente no inicializada'})
+
+    import pandas as pd
+    sample_rows = 25
+    cols = []
+    data = []
+
+    try:
+        if source_type == 'excel':
+            df = pd.read_excel(temp_file, sheet_name=tabla, nrows=sample_rows, dtype=object)
+        elif source_type == 'csv':
+            if tabla != 'csv_table':
+                return JsonResponse({'ok': False, 'error': 'Tabla CSV inválida'})
+            df = pd.read_csv(temp_file, nrows=sample_rows, dtype=object)
+        elif source_type == 'sql':
+            if not engine_url:
+                return JsonResponse({'ok': False, 'error': 'Sin conexión'})
+            engine = create_engine(engine_url)
+            safe = re.sub(r'[^A-Za-z0-9_]', '', tabla)
+            df = pd.read_sql(f"SELECT * FROM `{safe}` LIMIT {sample_rows}", engine)
+        elif source_type == 'sql_script':
+            # Para scripts SQL, vamos a crear tablas temporales con prefijo en lugar de schema temporal
+            if not engine_url:
+                return JsonResponse({'ok': False, 'error': 'Sin conexión'})
+            
+            script = request.session.get('sql_script', '')
+            if not script:
+                return JsonResponse({'ok': False, 'error': 'Script SQL no disponible'})
+            
+            # Usamos un prefijo único para las tablas temporales
+            prefix = f"__tmp_{uuid.uuid4().hex[:8]}_"
+            engine = create_engine(engine_url)
+            created_tables = []
+            
+            try:
+                # Modifica el script para crear tablas con prefijo
+                def _reemplazar_tabla(m):
+                    nombre_tabla = m.group(2)
+                    return f"{m.group(1)} `{prefix}{nombre_tabla}`"
+                
+                script_mod = re.sub(r'(?i)\b(CREATE\s+TABLE|INSERT\s+INTO)\s+`?([A-Za-z0-9_]+)`?',
+                                    _reemplazar_tabla, script)
+                
+                # Ejecuta el script modificado 
+                with engine.begin() as conn:
+                    for stmt in [s.strip() for s in script_mod.split(';') if s.strip()]:
+                        try:
+                            conn.execute(text(stmt))
+                            # Capturar tablas creadas para limpiarlas después
+                            if re.search(r'(?i)create\s+table', stmt):
+                                tabla_match = re.search(r'(?i)create\s+table\s+(?:if\s+not\s+exists\s+)?`?(\w+)`?', stmt)
+                                if tabla_match:
+                                    created_tables.append(tabla_match.group(1))
+                        except Exception:
+                            pass  # Ignoramos errores individuales
+                
+                # Ahora lee la tabla específica con el prefijo
+                temp_tabla = f"{prefix}{tabla}"
+                try:
+                    # Primero verifica si la tabla existe
+                    with engine.begin() as conn:
+                        result = conn.execute(text(
+                            f"SELECT COUNT(*) FROM information_schema.tables "
+                            f"WHERE table_schema = DATABASE() AND table_name = '{temp_tabla}'"
+                        ))
+                        if result.scalar() == 0:
+                            return JsonResponse({
+                                'ok': True, 
+                                'columnas': [], 
+                                'data': [],
+                                'warning': 'La tabla parece no existir o está vacía'
+                            })
+                    
+                    # Intenta leer la tabla
+                    df = pd.read_sql(f"SELECT * FROM `{temp_tabla}` LIMIT {sample_rows}", engine)
+                except Exception:
+                    # Si falla, devuelve estructura vacía
+                    return JsonResponse({
+                        'ok': True, 
+                        'columnas': [], 
+                        'data': [],
+                        'warning': 'La tabla parece no existir o está vacía'
+                    })
+                finally:
+                    # Limpiar tablas temporales
+                    with engine.begin() as conn:
+                        for tabla_tmp in created_tables:
+                            try:
+                                conn.execute(text(f"DROP TABLE IF EXISTS `{tabla_tmp}`"))
+                            except:
+                                pass
+            except Exception as e:
+                return JsonResponse({'ok': False, 'error': f"Error al preparar vista previa: {str(e)}"})
+        else:
+            return JsonResponse({'ok': False, 'error': 'Tipo de origen desconocido'})
+        
+        # Procesamiento común final
+        cols = [str(c) for c in df.columns]
+        # Limitar longitud de valores para preview
+        def _tr(v):
+            s = '' if pd.isna(v) else str(v)
+            return s[:120]
+        data = [[_tr(v) for v in row] for row in df.itertuples(index=False, name=None)]
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': str(e)})
+
+    return JsonResponse({'ok': True, 'columnas': cols, 'data': data})
+    
 @require_GET
 def preview_tabla(request):
     """
@@ -994,8 +1263,6 @@ def preview_tabla(request):
     engine_url = request.session.get('engine_url')
     source_type = request.session.get('source_type')
     temp_file = request.session.get('temp_file')
-    created_tables = request.session.get('created_tables', [])
-    excel_sheets = request.session.get('excel_sheets', [])
 
     if not source_type:
         return JsonResponse({'ok': False, 'error': 'Fuente no inicializada'})
@@ -1007,8 +1274,6 @@ def preview_tabla(request):
 
     try:
         if source_type == 'excel':
-            if tabla not in excel_sheets:
-                return JsonResponse({'ok': False, 'error': 'Hoja inválida'})
             df = pd.read_excel(temp_file, sheet_name=tabla, nrows=sample_rows, dtype=object)
         elif source_type == 'csv':
             if tabla != 'csv_table':
@@ -1018,11 +1283,64 @@ def preview_tabla(request):
             if not engine_url:
                 return JsonResponse({'ok': False, 'error': 'Sin conexión'})
             engine = create_engine(engine_url)
-            # Sanitizar nombre sencillo (evitar backticks peligrosos)
             safe = re.sub(r'[^A-Za-z0-9_]', '', tabla)
             df = pd.read_sql(f"SELECT * FROM `{safe}` LIMIT {sample_rows}", engine)
+        elif source_type == 'sql_script':
+            # Para scripts SQL, necesitamos crear schema temporal y ejecutar ahí
+            if not engine_url:
+                return JsonResponse({'ok': False, 'error': 'Sin conexión'})
+            
+            script = request.session.get('sql_script', '')
+            if not script:
+                return JsonResponse({'ok': False, 'error': 'Script SQL no disponible'})
+            
+            # Crea schema temporal único para preview
+            import uuid
+            temp_schema = f"__preview_{uuid.uuid4().hex[:8]}"
+            engine = create_engine(engine_url)
+            
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS `{temp_schema}`"))
+                    
+                    # Modifica el script para crear tablas en schema temporal
+                    def _reemplazar_tabla(m):
+                        nombre_tabla = m.group(2)
+                        return f"{m.group(1)} `{temp_schema}`.`{nombre_tabla}`"
+                    
+                    script_mod = re.sub(r'(?i)\b(CREATE\s+TABLE|INSERT\s+INTO)\s+`?([A-Za-z0-9_]+)`?',
+                                        _reemplazar_tabla, script)
+                    
+                    # Ejecuta el script modificado en el schema temporal
+                    for stmt in [s.strip() for s in script_mod.split(';') if s.strip()]:
+                        try:
+                            conn.execute(text(stmt))
+                        except Exception:
+                            pass  # Ignoramos errores individuales
+                
+                # Ahora lee la tabla específica desde el schema temporal
+                safe_tabla = re.sub(r'[^A-Za-z0-9_]', '', tabla)
+                try:
+                    # Intenta leer la tabla
+                    df = pd.read_sql(f"SELECT * FROM `{temp_schema}`.`{safe_tabla}` LIMIT {sample_rows}", engine)
+                except Exception:
+                    # Si falla, devuelve estructura vacía
+                    return JsonResponse({
+                        'ok': True, 
+                        'columnas': [], 
+                        'data': [],
+                        'warning': 'La tabla parece no existir o está vacía'
+                    })
+                finally:
+                    # Siempre limpia el schema temporal
+                    with engine.begin() as conn:
+                        conn.execute(text(f"DROP SCHEMA IF EXISTS `{temp_schema}`"))
+            except Exception as e:
+                return JsonResponse({'ok': False, 'error': f"Error al preparar vista previa: {str(e)}"})
         else:
-            return JsonResponse({'ok': False, 'error': 'Tipo desconocido'})
+            return JsonResponse({'ok': False, 'error': 'Tipo de origen desconocido'})
+        
+        # Procesamiento común final
         cols = [str(c) for c in df.columns]
         # Limitar longitud de valores para preview
         def _tr(v):
@@ -1068,16 +1386,20 @@ def seleccionar_datos(request):
     excel_sheets = request.session.get('excel_sheets', [])
     created_tables = request.session.get('created_tables', [])
 
-    # ========== PASO 1: SUBIR / CARGAR ARCHIVO ==========
+
     if request.method == 'POST' and request.POST.get('accion') == 'subir_archivo':
-        modo = request.POST.get('modo_origen', 'local')  # 'local' | 'compartido'
-        # Limpieza estado previo
-        for k in ['source_type', 'temp_file', 'excel_sheets', 'created_tables']:
+        modo = request.POST.get('modo_origen', 'local')
+
+        # Limpiar estado previo
+        for k in ['source_type','temp_file','excel_sheets','created_tables','sql_script','candidate_sql_tables']:
             request.session.pop(k, None)
 
         import tempfile, shutil
+        script = ''
+        archivo_path = None
+
+        # 1. Obtener archivo (local o compartido)
         try:
-            script = None  # Texto SQL si es .sql
             if modo == 'compartido':
                 ruta = (request.POST.get('ruta_compartida') or '').strip()
                 nombre_archivo = (request.POST.get('nombre_archivo') or '').strip()
@@ -1111,139 +1433,193 @@ def seleccionar_datos(request):
                 if ext == '.sql':
                     archivo.seek(0)
                     script = archivo.read().decode('utf-8', errors='ignore')
+        except Exception as e:
+            messages.error(request, f"Error leyendo el archivo: {e}")
+            return redirect('seleccionar_datos')
 
-            # Procesar según extensión
-            if ext in ('.xlsx', '.xls'):
+        # 2. Procesar según extensión
+        if ext in ('.xlsx', '.xls'):
+            try:
                 xls = pd.ExcelFile(archivo_path)
                 request.session['source_type'] = 'excel'
                 request.session['temp_file'] = archivo_path
                 request.session['excel_sheets'] = xls.sheet_names
                 request.session['wizard_step'] = 2
-                messages.success(request, f"Excel cargado ({len(xls.sheet_names)} hojas).")
-            elif ext == '.csv':
-                request.session['source_type'] = 'csv'
-                request.session['temp_file'] = archivo_path
-                request.session['excel_sheets'] = ['csv_table']
-                request.session['wizard_step'] = 2
-                messages.success(request, "CSV cargado.")
-            elif ext == '.sql':
-                if not script:
-                    messages.error(request, "Script SQL vacío.")
-                    return redirect('seleccionar_datos')
+                messages.success(request, f"Excel cargado ({len(xls.sheet_names)} hojas). Selecciona qué subir.")
+            except Exception as e:
+                messages.error(request, f"Error leyendo Excel: {e}")
+                return redirect('seleccionar_datos')
+
+        elif ext == '.csv':
+            request.session['source_type'] = 'csv'
+            request.session['temp_file'] = archivo_path
+            request.session['excel_sheets'] = ['csv_table']
+            request.session['wizard_step'] = 2
+            messages.success(request, "CSV cargado. Selecciona columnas.")
+
+        elif ext == '.sql':
+            if not script.strip():
+                messages.error(request, "Script SQL vacío.")
+                return redirect('seleccionar_datos')
+
+            patt = re.compile(r'create\s+table\s+`?([A-Za-z0-9_]+)`?', re.IGNORECASE)
+            tablas = patt.findall(script)
+            tablas = sorted(list(dict.fromkeys(tablas)))
+            if not tablas:
+                messages.warning(request, "No se detectaron tablas en el script. Aun así se ejecutará.")
+
+            errores = []
+            total_filas = 0
+            try:
                 bloques = [b.strip() for b in script.split(';') if b.strip()]
-                before = set(_extraer_tablas_creadas(engine))
-                omitidos = 0
                 with engine.begin() as conn:
                     for stmt in bloques:
                         try:
                             conn.execute(text(stmt))
                         except Exception as e:
-                            if 'exist' in str(e).lower():
-                                omitidos += 1
-                            else:
-                                messages.warning(request, "Sentencia omitida.")
-                after = set(_extraer_tablas_creadas(engine))
-                nuevas = sorted(list(after - before)) or sorted(list(after))
-                request.session['source_type'] = 'sql'
-                request.session['created_tables'] = nuevas
-                request.session['wizard_step'] = 2
+                            errores.append({'stmt': stmt[:60], 'error': str(e)})
+                            messages.warning(request, f"Error al ejecutar: {e}")
 
-                # Guardar como proceso (automatización) si el usuario lo pide
-                if request.POST.get('guardar_proceso'):
-                    import time
-                    from sqlalchemy.engine.url import make_url
-                    url = make_url(engine_url)
-                    nombre_proc = (request.POST.get('nombre_proceso') or f"proc_sql_{int(time.time())}").strip()
-                    cfg = {
-                        "nombre_proceso": nombre_proc,
-                        "origen": {
-                            "tipo": "sql_script",
-                            "contenido": script,
-                            "tablas_resultantes": nuevas
-                        },
-                        "destino": {
-                            "motor": "mysql",  # Ajustar si detectas otro motor
-                            "conexion": {
-                                "host": url.host,
-                                "puerto": url.port or 3306,
-                                "usuario": url.username,
-                                "password": url.password,
-                                "base": url.database
-                            }
-                        },
-                        "ejecucion": {"on_error": "continue"}
-                    }
-                    try:
-                        ProcessConfig.objects.create(
-                            nombre=nombre_proc,
-                            descripcion="Proceso generado desde carga .sql",
-                            json_config=cfg
-                        )
-                        messages.success(request, f"Proceso '{nombre_proc}' guardado.")
-                    except Exception as e:
-                        messages.error(request, f"No se pudo guardar el proceso: {e}")
+                # Contar filas usando una conexión explícita (SQLAlchemy 2.x)
+                with engine.connect() as conn:
+                    for t in tablas:
+                        try:
+                            result = conn.execute(text(f"SELECT COUNT(*) FROM `{t}`"))
+                            filas = result.scalar() or 0
+                            total_filas += filas
+                            messages.info(request, f"Tabla '{t}': {filas} filas")
+                        except Exception as e:
+                            messages.warning(request, f"Error leyendo '{t}': {e}")
 
-                msg = f"Script SQL ejecutado ({len(nuevas)} tablas)."
-                if omitidos:
-                    msg += f" {omitidos} sentencia(s) omitida(s)."
-                messages.success(request, msg)
-            else:
-                messages.error(request, "Formato no soportado.")
+                messages.success(request, f"Script ejecutado. {len(tablas)} tabla(s), {total_filas} fila(s).")
+            except Exception as e:
+                messages.error(request, f"Error global ejecutando script: {e}")
+
+            if request.POST.get('guardar_proceso'):
+                import time
+                from sqlalchemy.engine.url import make_url
+                url = make_url(engine_url)
+                nombre_proc = (request.POST.get('nombre_proceso') or f"proc_sql_{int(time.time())}").strip()
+                cfg = {
+                    "nombre_proceso": nombre_proc,
+                    "origen": {
+                        "tipo": "sql_script",
+                        "contenido": script,
+                        "tablas_resultantes": tablas
+                    },
+                    "destino": {
+                        "motor": "mysql",
+                        "conexion": {
+                            "host": url.host,
+                            "puerto": url.port or 3306,
+                            "usuario": url.username,
+                            "password": url.password,
+                            "base": url.database
+                        }
+                    },
+                    "ejecucion": {"on_error": "continue"}
+                }
+                try:
+                    proceso = ProcessConfig.objects.create(
+                        nombre=nombre_proc,
+                        descripcion="Proceso (ejecutado inmediatamente)",
+                        json_config=cfg
+                    )
+                    run = ProcessRunLog.objects.create(
+                        proceso=proceso,
+                        exito=True,
+                        filas_totales=total_filas,
+                        mensaje=f"OK. Filas procesadas: {total_filas}",
+                        fin=timezone.now()
+                    )
+                    if errores:
+                        run.errores = errores
+                        run.save()
+                    messages.success(request, f"Proceso '{nombre_proc}' guardado y registrado.")
+                except Exception as e:
+                    messages.error(request, f"No se pudo guardar el proceso: {e}")
+
+            return redirect('index')
+
+        else:
+            messages.error(request, "Extensión no soportada.")
             return redirect('seleccionar_datos')
-        except Exception as e:
-            messages.error(request, f"Error: {e}")
-            return redirect('seleccionar_datos')
 
-    # ========== PASO 2: PROCESAR TABLAS / COLUMNAS ==========
+
+
+    # Procesar columnas (Paso 2)
     if request.method == 'POST' and request.POST.get('accion') == 'procesar_columnas' and step == 2:
         tablas_sel = request.POST.getlist('tablas')
         if not tablas_sel:
             messages.error(request, "Selecciona al menos una tabla.")
             return redirect('seleccionar_datos')
-
+        source_type = request.session.get('source_type')
         normalizar = bool(request.POST.get('aplicar_normalizacion'))
         procesadas = 0
+        detalles = []
+
+        if source_type == 'sql_script':
+            script = request.session.get('sql_script', '')
+            if not script:
+                messages.error(request, "Script no disponible en sesión.")
+                return redirect('seleccionar_datos')
+            temp_schema = f"__tmp_{uuid.uuid4().hex[:8]}"
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS `{temp_schema}`"))
+                    # Reescribir CREATE/INSERT apuntando al schema temporal
+                    def _reemplazar_tabla(m):
+                        nombre_tabla = m.group(2)
+                        return f"{m.group(1)} `{temp_schema}`.`{nombre_tabla}`"
+                    script_mod = re.sub(r'(?i)\b(CREATE\s+TABLE|INSERT\s+INTO)\s+`?([A-Za-z0-9_]+)`?',
+                                        _reemplazar_tabla, script)
+                    for stmt in [s.strip() for s in script_mod.split(';') if s.strip()]:
+                        conn.execute(text(stmt))
+            except Exception as e:
+                messages.error(request, f"Fallo ejecutando script: {e}")
+                # Intentar limpiar
+                with engine.begin() as c:
+                    try:
+                        c.execute(text(f"DROP SCHEMA IF EXISTS `{temp_schema}`"))
+                    except:
+                        pass
+                return redirect('seleccionar_datos')
 
         for tabla in tablas_sel:
             cols_sel = request.POST.getlist(f'columnas_{tabla}')
             if not cols_sel:
                 continue
 
-            # Cargar DataFrame según origen
+            # Cargar DataFrame
             if source_type == 'excel':
-                try:
-                    df_full = pd.read_excel(temp_file, sheet_name=tabla, dtype=object)
-                except Exception:
-                    df_full = pd.DataFrame()
+                df_full = pd.read_excel(request.session['temp_file'], sheet_name=tabla, dtype=object)
             elif source_type == 'csv':
+                df_full = pd.read_csv(request.session['temp_file'], dtype=object)
+            elif source_type == 'sql_script':
+                # Leer de schema temporal
+                safe = re.sub(r'[^A-Za-z0-9_]', '', tabla)
                 try:
-                    df_full = pd.read_csv(temp_file, dtype=object)
-                except Exception:
-                    df_full = pd.DataFrame()
-            else:  # sql
-                try:
-                    safe = re.sub(r'[^A-Za-z0-9_]', '', tabla)
                     select_cols = ", ".join([f"`{c}`" for c in cols_sel])
-                    df_full = pd.read_sql(f"SELECT {select_cols} FROM `{safe}`", engine)
+                    df_full = pd.read_sql(f"SELECT {select_cols} FROM `{temp_schema}`.`{safe}`", engine)
                 except Exception:
                     df_full = pd.DataFrame(columns=cols_sel)
+            else:
+                df_full = pd.DataFrame()
 
-            if not df_full.empty and source_type in ('excel', 'csv'):
+            if source_type in ('excel','csv'):
                 df_full = df_full[[c for c in cols_sel if c in df_full.columns]]
 
-            # Rango de filas
+            # Rango filas
             def _toi(v, d):
-                try:
-                    return int(v)
-                except:
-                    return d
+                try: return int(v)
+                except: return d
             inicio = _toi(request.POST.get(f'fila_inicio_{tabla}', 0), 0)
             fin_raw = (request.POST.get(f'fila_fin_{tabla}', '') or '').strip()
             fin = _toi(fin_raw, len(df_full)) if fin_raw else len(df_full)
             if inicio < 0: inicio = 0
             if fin > len(df_full): fin = len(df_full)
             if fin < inicio: fin = inicio
-            df = df_full.iloc[inicio:fin] if not df_full.empty else df_full
+            df = df_full.iloc[inicio:fin]
 
             # Renombrado
             nuevos = {}
@@ -1257,47 +1633,46 @@ def seleccionar_datos(request):
                     nuevo = f"{base}_{k}"
                 usados.add(nuevo)
                 nuevos[col] = nuevo
-            if not df.empty:
-                df = df.rename(columns=nuevos)
-            else:
-                df = pd.DataFrame(columns=[nuevos[c] for c in cols_sel])
+            df = df.rename(columns=nuevos)
 
-            # Normalización
             if normalizar and not df.empty:
                 for c in df.columns:
                     df[c] = df[c].apply(_normalizar_celda)
 
             final_name = request.POST.get(f'nombre_tabla_final_{tabla}', tabla).strip() or tabla
             final_name = re.sub(r'\W+', '_', final_name)[:60]
-
             try:
                 df.to_sql(final_name, engine, if_exists='replace', index=False)
                 procesadas += 1
+                detalles.append(f"{final_name}({len(df)})")
             except Exception as e:
-                # Mensaje corto si existe
-                if 'exists' in str(e).lower() and 'table' in str(e).lower():
-                    messages.error(request, f"Tabla {final_name} ya existe.")
-                else:
-                    messages.error(request, f"Error guardando {final_name}.")
+                messages.error(request, f"Error guardando {final_name}: {e}")
+
+        # Limpiar schema temporal si hubo script
+        if source_type == 'sql_script':
+            with engine.begin() as conn:
+                try:
+                    conn.execute(text(f"DROP SCHEMA `{temp_schema}`"))
+                except:
+                    pass
 
         if procesadas:
-            messages.success(request, f"{procesadas} tabla(s) guardada(s).")
+            messages.success(request, f"{procesadas} tabla(s) guardada(s): " + ", ".join(detalles))
         else:
             messages.error(request, "No se guardó ninguna tabla.")
-        # Reset flujo
-        for k in ['wizard_step', 'source_type', 'temp_file', 'excel_sheets', 'created_tables']:
+        for k in ['wizard_step','source_type','temp_file','excel_sheets','created_tables','sql_script','candidate_sql_tables']:
             request.session.pop(k, None)
         return redirect('index')
 
-    # ========== RENDER ==========
-    step = request.session.get('wizard_step', 1)
+    # Render Step 2
     if step == 2:
+        source_type = request.session.get('source_type')
         if source_type == 'excel':
-            tablas_disponibles = excel_sheets
+            tablas_disponibles = request.session.get('excel_sheets', [])
         elif source_type == 'csv':
             tablas_disponibles = ['csv_table']
-        elif source_type == 'sql':
-            tablas_disponibles = created_tables or _extraer_tablas_creadas(engine)
+        elif source_type == 'sql_script':
+            tablas_disponibles = request.session.get('candidate_sql_tables', [])
         else:
             tablas_disponibles = []
         return render(request, 'archivos/seleccionar_datos.html', {
@@ -1307,8 +1682,6 @@ def seleccionar_datos(request):
         })
 
     return render(request, 'archivos/seleccionar_datos.html', {'step': 1})
-
-# ...existing code abajo...
 
 
 def _extraer_tablas_creadas(engine):
