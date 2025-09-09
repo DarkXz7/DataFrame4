@@ -27,6 +27,7 @@ from django.conf import settings
 from django.views.decorators.http import require_GET
 import traceback
 from django.utils import timezone
+import traceback
 
 
 
@@ -963,7 +964,13 @@ def conectar_sqlserver_automatico(request):
 def subir_sql(request):
     from .sqlserver_utils import get_sqlserver_connection_string, sqlalchemy_connection
     from .mysql_to_sqlserver import convert_mysql_to_sqlserver, execute_sqlserver_script
+    from .models import ProcessAutomation, SqlFileUpload
     import logging
+    import json
+    import tempfile
+    import os
+    from datetime import datetime
+    import time
     
     logger = logging.getLogger(__name__)
     
@@ -982,14 +989,56 @@ def subir_sql(request):
     if request.method == 'POST':
         archivo_sql = request.FILES.get('archivo_sql')
         if archivo_sql:
+            # Registrar tiempo de inicio para medir duración
+            tiempo_inicio = time.time()
+            
             # Limpiar sesión de datos anteriores
             for key in ['tablas', 'tablas_seleccionadas', 'columnas', 'columnas_elegidas']:
                 if key in request.session:
                     del request.session[key]
             
+            # Obtener información básica del archivo
+            nombre_archivo = archivo_sql.name
+            tamanio_bytes = archivo_sql.size
+            
             # Leer contenido del archivo SQL
             archivo_sql.seek(0)
             sql_texto_original = archivo_sql.read().decode('utf-8', errors='ignore')
+            
+            # Crear un registro temporal del archivo
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.sql', mode='w', encoding='utf-8') as tmp:
+                tmp.write(sql_texto_original)
+                ruta_temporal = tmp.name
+              # Crear registro inicial en SqlFileUpload
+            sql_upload = SqlFileUpload(
+                nombre_archivo=nombre_archivo,
+                tamanio_bytes=tamanio_bytes,
+                fecha_subida=timezone.now(),  # Usar timezone.now() en lugar de auto_now_add
+                usuario=request.user.username if request.user.is_authenticated else 'usuario_anónimo',
+                sentencias_total=0,
+                sentencias_exito=0,
+                conversion_mysql=('`' in sql_texto_original or 'ENGINE=' in sql_texto_original),
+                estado='Procesando',
+                ruta_temporal=ruta_temporal
+            )
+            sql_upload.save()
+            
+            # Crear registro de proceso en ProcessAutomation
+            process_record = ProcessAutomation(
+                nombre=f"Importación SQL: {nombre_archivo}",
+                tipo_proceso="Importación SQL",
+                fecha_ejecucion=timezone.now(),  # Usar timezone.now() en lugar de auto_now_add
+                estado="En proceso",
+                tiempo_ejecucion=0,
+                usuario=request.user.username if request.user.is_authenticated else 'usuario_anónimo',
+                parametros=json.dumps({
+                    "nombre_archivo": nombre_archivo,
+                    "tamanio_bytes": tamanio_bytes,
+                    "conversion_requerida": bool('`' in sql_texto_original or 'ENGINE=' in sql_texto_original)
+                }),
+                filas_afectadas=0
+            )
+            process_record.save()
             
             try:
                 # Convertir SQL de MySQL a formato compatible con SQL Server
@@ -998,9 +1047,17 @@ def subir_sql(request):
                 # Guardar versión original y convertida para visualización (opcional)
                 request.session['sql_original'] = sql_texto_original[:5000] if len(sql_texto_original) > 5000 else sql_texto_original
                 request.session['sql_convertido'] = sql_texto_convertido[:5000] if len(sql_texto_convertido) > 5000 else sql_texto_convertido
-                  # Ejecutar el script SQL convertido en SQL Server
-                resultados = execute_sqlserver_script(engine, sql_texto_convertido)
                 
+                # Actualizar registro del archivo con la versión convertida
+                sql_upload.version_convertida = sql_texto_convertido[:10000] if len(sql_texto_convertido) > 10000 else sql_texto_convertido
+                sql_upload.save()
+                
+                # Ejecutar el script SQL convertido en SQL Server
+                resultados = execute_sqlserver_script(engine, sql_texto_convertido)
+                  # Calcular tiempo de ejecución en segundos
+                tiempo_ejecucion = int(time.time() - tiempo_inicio)
+                
+                # Actualizar registros en ambas tablas con los resultados
                 if resultados['errors']:
                     # Hubo errores en la ejecución
                     error_summary = f"{len(resultados['errors'])} de {resultados['total']} sentencias fallaron."
@@ -1014,19 +1071,18 @@ def subir_sql(request):
                             messages.warning(request, warning)
                     
                     # Mostrar detalles del primer error con sugerencia si está disponible
-                    if resultados['errors']:
-                        first_error = resultados['errors'][0]
-                        error_msg = first_error['error']
-                        
-                        # Incluir sugerencia si está disponible
-                        if 'sugerencia' in first_error and first_error['sugerencia']:
-                            error_msg += f" - Sugerencia: {first_error['sugerencia']}"
-                        
-                        messages.error(request, f"Detalle del error: {error_msg}")
-                        
-                        # Si hay múltiples errores, agregar una nota
-                        if len(resultados['errors']) > 1:
-                            messages.info(request, f"Hay {len(resultados['errors'])-1} errores adicionales. Revise los logs para más detalles.")
+                    first_error = resultados['errors'][0]
+                    error_msg = first_error['error']
+                    
+                    # Incluir sugerencia si está disponible
+                    if 'sugerencia' in first_error and first_error['sugerencia']:
+                        error_msg += f" - Sugerencia: {first_error['sugerencia']}"
+                    
+                    messages.error(request, f"Detalle del error: {error_msg}")
+                    
+                    # Si hay múltiples errores, agregar una nota
+                    if len(resultados['errors']) > 1:
+                        messages.info(request, f"Hay {len(resultados['errors'])-1} errores adicionales. Revise los logs para más detalles.")
                     
                     # Registrar información detallada en logs
                     logger.error(f"Errores en ejecución SQL: {len(resultados['errors'])} de {resultados['total']} sentencias fallaron.")
@@ -1044,7 +1100,57 @@ def subir_sql(request):
                         } for e in resultados['errors'][:10]  # Limitamos a 10 errores
                     ]
                     
+                    # Actualizar registro de SqlFileUpload con los errores
+                    sql_upload.estado = 'Error'
+                    sql_upload.sentencias_total = resultados['total']
+                    sql_upload.sentencias_exito = resultados['success']
+                    sql_upload.errores = json.dumps([{
+                        'error': e['error'],
+                        'statement': e['statement'][:200],  # Limitamos la longitud
+                        'tipo': e.get('tipo', 'desconocido')
+                    } for e in resultados['errors'][:20]])  # Limitamos a 20 errores
+                    
+                    if resultados['tables_created']:
+                        sql_upload.tablas_creadas = json.dumps(resultados['tables_created'])
+                    
+                    sql_upload.save()
+                    
+                    # Actualizar registro de proceso con el fallo
+                    process_record.estado = 'Error'
+                    process_record.tiempo_ejecucion = tiempo_ejecucion
+                    process_record.filas_afectadas = resultados['success']
+                    process_record.error_mensaje = f"Error en SQL: {error_summary}. {error_msg}"
+                    process_record.resultado = json.dumps({
+                        'sentencias_totales': resultados['total'],
+                        'sentencias_exitosas': resultados['success'],
+                        'errores_totales': len(resultados['errors']),
+                        'tablas_afectadas': resultados['tables_created'] if 'tables_created' in resultados else []
+                    })
+                    process_record.save()
+                    
                     return redirect('subir_sql')
+                  # CASO DE ÉXITO - No hay errores
+                
+                # Actualizar registro en SqlFileUpload
+                sql_upload.estado = 'Completado'
+                sql_upload.sentencias_total = resultados['total']
+                sql_upload.sentencias_exito = resultados['success']
+                
+                if 'tables_created' in resultados and resultados['tables_created']:
+                    sql_upload.tablas_creadas = json.dumps(resultados['tables_created'])
+                
+                sql_upload.save()
+                
+                # Actualizar registro de proceso en ProcessAutomation
+                process_record.estado = 'Completado'
+                process_record.tiempo_ejecucion = tiempo_ejecucion
+                process_record.filas_afectadas = resultados['success']
+                process_record.resultado = json.dumps({
+                    'sentencias_totales': resultados['total'],
+                    'sentencias_exitosas': resultados['success'],
+                    'tablas_afectadas': resultados['tables_created'] if 'tables_created' in resultados else []
+                })
+                process_record.save()
                 
                 # Guardar tablas creadas en la sesión
                 if resultados['tables_created']:
@@ -1063,17 +1169,55 @@ def subir_sql(request):
                 request.session['source_type'] = 'sql'
                 request.session['wizard_step'] = 2
                 
-                # Mensaje de éxito
-                messages.success(request, f"Archivo SQL importado correctamente. {resultados['success']} sentencias ejecutadas.")
+                # Mensaje de éxito                messages.success(request, f"Archivo SQL importado correctamente. {resultados['success']} sentencias ejecutadas.")
                 if resultados['tables_created']:
                     messages.info(request, f"Tablas creadas: {', '.join(resultados['tables_created'][:5])}" + 
                                ("... y más" if len(resultados['tables_created']) > 5 else ""))
-                
                 return redirect('seleccionar_datos')
                 
             except Exception as e:
-                messages.error(request, f"Error al procesar el archivo SQL: {str(e)}")
+                # Calcular tiempo de ejecución hasta el error
+                tiempo_ejecucion = int(time.time() - tiempo_inicio)
+                
+                # Registrar el error en logs
                 logger.exception("Error en subir_sql")
+                error_detalle = traceback.format_exc()
+                
+                # Actualizar SqlFileUpload con información del error
+                sql_upload.estado = 'Error'
+                sql_upload.errores = json.dumps({
+                    'error': str(e),
+                    'detalle': error_detalle[:1000]  # Limitamos para no guardar trazas enormes
+                })
+                sql_upload.save()
+                
+                # Actualizar ProcessAutomation con información del error
+                process_record.estado = 'Error'
+                process_record.tiempo_ejecucion = tiempo_ejecucion
+                process_record.error_mensaje = f"Error inesperado: {str(e)}"
+                process_record.resultado = json.dumps({
+                    'error': str(e),
+                    'tipo_error': e.__class__.__name__
+                })
+                process_record.save()
+                
+                # Mostrar mensaje de error al usuario
+                messages.error(request, f"Error al procesar el archivo SQL: {str(e)}")
+                
+                # Guardar el error en la sesión para visualización
+                request.session['sql_errors'] = [{
+                    'error': str(e),
+                    'statement': 'N/A',
+                    'sugerencia': 'Revisa el formato del archivo SQL y asegúrate que sea compatible.'
+                }]
+                
+                # Eliminar el archivo temporal si existe
+                try:
+                    if os.path.exists(ruta_temporal):
+                        os.remove(ruta_temporal)
+                except:
+                    pass
+                
                 return redirect('subir_sql')
                 
     return render(request, "archivos/subir_sql.html")

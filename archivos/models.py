@@ -1,5 +1,6 @@
 from django.db import models
 import os
+from .db_models import ProcessAutomation, SqlFileUpload
 
 class CarpetaCompartida(models.Model):
     nombre = models.CharField(max_length=255, verbose_name="Nombre de la carpeta")
