@@ -1699,14 +1699,15 @@ def seleccionar_datos(request):
                     "nombre_proceso": nombre_proc,
                     "origen": {
                         "tipo": "sql_script",
-                        "contenido": script,
+                        "contenido": script,  # Guardar script completo para re-ejecución
                         "tablas_resultantes": tablas
                     },
                     "destino": {
-                        "motor": "mysql",
+                        "motor": "mssql",  # Ajustado para SQL Server
                         "conexion": {
-                            "host": url.host,
-                            "puerto": url.port or 3306,
+                            "host": url.host or 'localhost',
+                            # Si es SQL Server, port puede ser None si se usa instancia nombrada
+                            "puerto": url.port or 1433,
                             "usuario": url.username,
                             "password": url.password,
                             "base": url.database
@@ -2018,12 +2019,24 @@ def ejecutar_proceso(request, proceso_id):
         destino = cfg['destino']
         motor = destino['motor']
         conn = destino['conexion']
+        # Validación específica: usuario indicó SQL Server pero motor mal configurado (p.e. 'mysql')
+        # Detectamos patrón de instancia '\\' o puerto 1433 combinado con motor mysql y lo corregimos.
+        if motor == 'mysql' and (('\\' in str(conn.get('host',''))) or str(conn.get('puerto')) == '1433'):
+            messages.warning(request, "Configuración detectada como SQL Server; ajustando motor a mssql automáticamente.")
+            motor = 'mssql'
         if motor == 'mysql':
             engine_url = f"mysql+pymysql://{conn['usuario']}:{conn['password']}@{conn['host']}:{conn['puerto']}/{conn['base']}"
         elif motor == 'postgres':
             engine_url = f"postgresql://{conn['usuario']}:{conn['password']}@{conn['host']}:{conn['puerto']}/{conn['base']}"
         elif motor == 'mssql':
-            engine_url = f"mssql+pyodbc://{conn['usuario']}:{conn['password']}@{conn['host']},{conn['puerto']}/{conn['base']}?driver=ODBC+Driver+17+for+SQL+Server"
+            # Soportar host con instancia (host\INSTANCIA) sin puerto explícito
+            host_val = conn['host']
+            puerto_val = conn.get('puerto')
+            if '\\' in host_val:
+                # Si hay instancia y además puerto (posible conflicto), preferimos host\INSTANCIA y omitimos puerto
+                engine_url = f"mssql+pyodbc://{conn['usuario']}:{conn['password']}@{host_val}/{conn['base']}?driver=ODBC+Driver+17+for+SQL+Server"
+            else:
+                engine_url = f"mssql+pyodbc://{conn['usuario']}:{conn['password']}@{host_val},{puerto_val}/{conn['base']}?driver=ODBC+Driver+17+for+SQL+Server"
         else:
             raise ValueError("Motor destino no soportado")
         engine = create_engine(engine_url)
