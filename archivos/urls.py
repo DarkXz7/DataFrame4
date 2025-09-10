@@ -46,4 +46,5 @@ urlpatterns = [
     #Automatizacion de procesos
     path('procesos/', views.procesos_list, name='procesos_list'),
     path('procesos/<int:proceso_id>/ejecutar/', views.ejecutar_proceso, name='ejecutar_proceso'),
+    path('procesos/ejecuciones/', views.procesos_runs_list, name='procesos_runs_list'),
 ]

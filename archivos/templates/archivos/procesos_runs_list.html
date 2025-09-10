@@ -1,0 +1,87 @@
+{% extends 'archivos/base.html' %}
+{% block title %}Ejecuciones de Procesos{% endblock %}
+{% block content %}
+<div class="container mt-3" id="runs-root">
+  <div class="d-flex flex-wrap align-items-center mb-3 gap-2">
+    <h4 class="mb-0">Ejecuciones</h4>
+    <a href="{% url 'procesos_list' %}" class="btn btn-sm btn-outline-secondary ms-auto" aria-label="Ver procesos guardados"><i class="bi bi-diagram-3"></i> Procesos</a>
+  </div>
+  <form id="runsFilters" class="row g-2 mb-3" role="search" aria-label="Filtros ejecuciones">
+    <div class="col-sm-4 col-md-3">
+      <input type="text" class="form-control form-control-sm" name="q" placeholder="Buscar nombre o texto" value="{{ q }}" aria-label="Buscar texto">
+    </div>
+    <div class="col-sm-3 col-md-2">
+      <select class="form-select form-select-sm" name="usuario" aria-label="Filtrar usuario">
+        <option value="">Usuario</option>
+        {% for u in usuarios_distintos %}
+          <option value="{{ u }}" {% if usuario == u %}selected{% endif %}>{{ u }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-3 col-md-2">
+      <select class="form-select form-select-sm" name="estado" aria-label="Filtrar estado">
+        <option value="">Estado</option>
+        {% for e in estados_distintos %}
+          <option value="{{ e }}" {% if estado == e %}selected{% endif %}>{{ e }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <input type="date" class="form-control form-control-sm" name="fecha_desde" value="{{ fecha_desde }}" aria-label="Fecha desde">
+    </div>
+    <div class="col-6 col-md-2">
+      <input type="date" class="form-control form-control-sm" name="fecha_hasta" value="{{ fecha_hasta }}" aria-label="Fecha hasta">
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-funnel"></i> Aplicar</button>
+      <a href="?" class="btn btn-sm btn-outline-secondary" aria-label="Limpiar filtros">Limpiar</a>
+    </div>
+  </form>
+  <div id="runsTable" data-endpoint="{% url 'procesos_runs_list' %}">
+    {% include 'archivos/partials/_runs_table.html' %}
+  </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+// Búsqueda incremental y paginación AJAX
+(function(){
+  const root=document.getElementById('runs-root');
+  const form=document.getElementById('runsFilters');
+  const tableWrap=document.getElementById('runsTable');
+  let timer=null;
+  function fetchData(){
+    const params=new URLSearchParams(new FormData(form));
+    params.set('partial','1');
+    const url=tableWrap.dataset.endpoint+'?'+params.toString();
+    tableWrap.classList.add('opacity-50');
+    fetch(url,{headers:{'X-Requested-With':'XMLHttpRequest'}})
+      .then(r=>r.text())
+      .then(html=>{tableWrap.innerHTML=html;tableWrap.classList.remove('opacity-50');attachPagination();})
+      .catch(()=>tableWrap.classList.remove('opacity-50'));
+  }
+  function debounceFetch(){clearTimeout(timer);timer=setTimeout(fetchData,350);} // búsqueda incremental
+  form.querySelectorAll('input[name=q]').forEach(inp=>{
+    inp.addEventListener('input',debounceFetch);
+  });
+  form.querySelectorAll('select,input[type=date]').forEach(el=>{
+    el.addEventListener('change',fetchData);
+  });
+  function attachPagination(){
+    tableWrap.querySelectorAll('a.page-link').forEach(a=>{
+      a.addEventListener('click',function(ev){
+        if(a.getAttribute('href').startsWith('?')){ev.preventDefault();
+          const params=new URLSearchParams(new FormData(form));
+          params.set('page',a.dataset.page);
+          params.set('partial','1');
+          const url=tableWrap.dataset.endpoint+'?'+params.toString();
+          fetch(url,{headers:{'X-Requested-With':'XMLHttpRequest'}})
+            .then(r=>r.text()).then(html=>{tableWrap.innerHTML=html;attachPagination();});
+        }
+      });
+    });
+  }
+  attachPagination();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,75 @@
+<table class="table table-sm table-hover align-middle" aria-describedby="runsHelp">
+  <thead class="table-light">
+    <tr>
+      <th>Nombre</th>
+      <th class="d-none d-md-table-cell">Usuario</th>
+      <th>Fecha</th>
+      <th>Estado</th>
+      <th class="d-none d-lg-table-cell">Resultado</th>
+      <th class="text-end">Filas</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% if page_obj.object_list %}
+      {% for r in page_obj.object_list %}
+        <tr>
+          <td class="small">{{ r.nombre }}</td>
+          <td class="small text-muted d-none d-md-table-cell">{{ r.usuario }}</td>
+            <td><time datetime="{{ r.fecha_ejecucion|date:'c' }}" title="{{ r.fecha_ejecucion|date:'Y-m-d H:i' }}">{{ r.fecha_ejecucion|date:'Y-m-d H:i' }}</time></td>
+          <td>
+            {% with est=r.estado|lower %}
+              {% if 'error' in est %}
+                <span class="badge bg-danger">{{ r.estado }}</span>
+              {% elif 'parc' in est %}
+                <span class="badge bg-warning text-dark">{{ r.estado }}</span>
+              {% elif 'guardado' in est or 'sin_cambios' in est %}
+                <span class="badge bg-secondary">{{ r.estado }}</span>
+              {% elif 'proc' in est or 'cola' in est %}
+                <span class="badge bg-info text-dark">{{ r.estado }}</span>
+              {% else %}
+                <span class="badge bg-success">{{ r.estado }}</span>
+              {% endif %}
+            {% endwith %}
+          </td>
+          <td class="small d-none d-lg-table-cell">{{ r.resultado|default:'-'|truncatechars:60 }}</td>
+          <td class="text-end"><span class="badge bg-primary" title="Filas afectadas">{{ r.filas_afectadas }}</span></td>
+        </tr>
+        {% if r.error_mensaje %}
+          <tr class="table-danger">
+            <td colspan="6" class="small"><strong>Error:</strong> {{ r.error_mensaje|truncatechars:200 }}</td>
+          </tr>
+        {% endif %}
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="6" class="text-center py-4">
+        <div class="text-muted">
+          <i class="bi bi-activity display-6 d-block"></i>
+          No hay ejecuciones registradas.
+        </div>
+      </td></tr>
+    {% endif %}
+  </tbody>
+</table>
+{% if page_obj.paginator.num_pages > 1 %}
+<nav aria-label="Paginación ejecuciones">
+  <ul class="pagination pagination-sm">
+    {% if page_obj.has_previous %}
+      <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}" data-page="{{ page_obj.previous_page_number }}">&laquo;</a></li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+    {% endif %}
+    {% for num in page_obj.paginator.page_range %}
+      {% if num == page_obj.number %}
+        <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+      {% else %}
+        <li class="page-item"><a class="page-link" href="?page={{ num }}" data-page="{{ num }}">{{ num }}</a></li>
+      {% endif %}
+    {% endfor %}
+    {% if page_obj.has_next %}
+      <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}" data-page="{{ page_obj.next_page_number }}">&raquo;</a></li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}

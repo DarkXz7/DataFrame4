@@ -68,8 +68,9 @@
         </label>
       </div>
       <div class="mb-3">
-        <input type="text" class="form-control form-control-sm" name="nombre_proceso"
-               placeholder="Nombre del proceso (opcional)" value="{{ request.POST.nombre_proceso }}">
+        <input type="text" class="form-control form-control-sm" name="nombre_proceso" id="nombre_proceso_input"
+               placeholder="Nombre del proceso (opcional)" value="{{ request.POST.nombre_proceso }}" {% if not request.POST.guardar_proceso %}disabled aria-disabled="true"{% endif %} aria-label="Nombre del proceso">
+        <small class="text-muted" id="nombreProcesoHelp">Se habilita al marcar "Guardar como proceso".</small>
       </div>
 
       <button class="btn btn-primary" name="accion" value="subir_archivo">Continuar</button>
@@ -211,6 +212,22 @@
           cargando.style.display = 'none';
           previewResult.innerHTML = `<div class="alert alert-danger">Error de comunicación: ${error}</div>`;
         });
+      });
+    }
+    // Habilitar/deshabilitar input de nombre proceso
+    const chkGuardar = document.getElementById('gp');
+    const nombreProceso = document.getElementById('nombre_proceso_input');
+    if(chkGuardar && nombreProceso){
+      chkGuardar.addEventListener('change',()=>{
+        if(chkGuardar.checked){
+          nombreProceso.removeAttribute('disabled');
+          nombreProceso.setAttribute('aria-disabled','false');
+          nombreProceso.focus();
+        } else {
+          nombreProceso.value='';
+          nombreProceso.setAttribute('disabled','disabled');
+          nombreProceso.setAttribute('aria-disabled','true');
+        }
       });
     }
   });

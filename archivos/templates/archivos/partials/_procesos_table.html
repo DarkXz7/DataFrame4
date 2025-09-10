@@ -1,0 +1,68 @@
+{% comment %}Tabla parcial reutilizable para lista de ProcessConfig{% endcomment %}
+<table class="table table-sm table-hover align-middle" aria-describedby="procesosHelp">
+  <thead class="table-light">
+    <tr>
+      <th scope="col">Nombre</th>
+      <th scope="col" class="d-none d-md-table-cell">Descripción</th>
+      <th scope="col">Ejecuciones</th>
+      <th scope="col">Actualizado</th>
+      <th scope="col">Estado</th>
+      <th scope="col" class="text-end">Acciones</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% if page_obj.object_list %}
+      {% for p in page_obj.object_list %}
+        <tr>
+          <td><span class="fw-semibold">{{ p.nombre }}</span></td>
+          <td class="small text-muted d-none d-md-table-cell">{{ p.descripcion|default:'-'|truncatechars:80 }}</td>
+          <td><span class="badge bg-secondary" title="Total de ejecuciones">{{ p.total_runs }}</span></td>
+          <td><time datetime="{{ p.actualizado|date:'c' }}" title="{{ p.actualizado|date:'Y-m-d H:i' }}">{{ p.actualizado|date:'Y-m-d H:i' }}</time></td>
+          <td>
+            {% if p.activo %}
+              <span class="badge bg-success" aria-label="Activo">Activo</span>
+            {% else %}
+              <span class="badge bg-secondary" aria-label="Inactivo">Inactivo</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-primary" href="{% url 'ejecutar_proceso' p.id %}" aria-label="Ejecutar {{ p.nombre }}"><i class="bi bi-play"></i></a>
+          </td>
+        </tr>
+      {% endfor %}
+    {% else %}
+      <tr>
+        <td colspan="6" class="text-center py-4">
+          <div class="text-muted">
+            <i class="bi bi-inbox display-6 d-block"></i>
+            No hay procesos que coincidan con los filtros.
+          </div>
+        </td>
+      </tr>
+    {% endif %}
+  </tbody>
+</table>
+
+{% if paginator.num_pages > 1 %}
+<nav aria-label="Paginación procesos">
+  <ul class="pagination pagination-sm mb-0">
+    {% if page_obj.has_previous %}
+      <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{{ request.GET.urlencode|cut:'page='|yesno:',&' }}" data-page="{{ page_obj.previous_page_number }}" aria-label="Página anterior">&laquo;</a></li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
+    {% endif %}
+    {% for num in paginator.page_range %}
+      {% if num == page_obj.number %}
+        <li class="page-item active" aria-current="page"><span class="page-link">{{ num }}</span></li>
+      {% else %}
+        <li class="page-item"><a class="page-link" href="?page={{ num }}" data-page="{{ num }}">{{ num }}</a></li>
+      {% endif %}
+    {% endfor %}
+    {% if page_obj.has_next %}
+      <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}" data-page="{{ page_obj.next_page_number }}" aria-label="Página siguiente">&raquo;</a></li>
+    {% else %}
+      <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+    {% endif %}
+  </ul>
+</nav>
+{% endif %}

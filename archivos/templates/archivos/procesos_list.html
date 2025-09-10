@@ -1,31 +1,73 @@
 {% extends 'archivos/base.html' %}
-{% block title %}Procesos{% endblock %}
+{% block title %}Procesos Guardados{% endblock %}
 {% block content %}
-<div class="container mt-4">
-  <h4>Procesos Automatizados</h4>
-  {% if messages %}
-    {% for m in messages %}
-      <div class="alert alert-{{ m.tags }} py-1 mb-2">{{ m }}</div>
-    {% endfor %}
-  {% endif %}
-  {% if procesos %}
-    <table class="table table-sm table-striped align-middle">
-      <thead><tr><th>Nombre</th><th>Descripción</th><th>Actualizado</th><th></th></tr></thead>
-      <tbody>
-        {% for p in procesos %}
-          <tr>
-            <td>{{ p.nombre }}</td>
-            <td>{{ p.descripcion|default:"-" }}</td>
-            <td>{{ p.actualizado|date:"Y-m-d H:i" }}</td>
-            <td>
-              <a class="btn btn-success btn-sm" href="{% url 'ejecutar_proceso' p.id %}">Ejecutar</a>
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p>No hay procesos configurados.</p>
-  {% endif %}
+<div class="container mt-3" id="procesos-root">
+  <div class="d-flex flex-wrap align-items-center mb-3 gap-2">
+    <h4 class="mb-0">Procesos Guardados</h4>
+    <a href="{% url 'procesos_runs_list' %}" class="btn btn-sm btn-outline-secondary ms-auto" aria-label="Ver ejecuciones"><i class="bi bi-clock-history"></i> Ejecuciones</a>
+  </div>
+
+  <form id="procesosFilters" class="row g-2 mb-3" role="search" aria-label="Filtros procesos">
+    <div class="col-sm-4 col-md-3">
+      <input type="text" class="form-control form-control-sm" name="q" placeholder="Buscar nombre o descripción" value="{{ q }}" aria-label="Buscar texto">
+    </div>
+    <div class="col-sm-2 col-md-2">
+      <select class="form-select form-select-sm" name="activo" aria-label="Filtro activo">
+        <option value="">Activo?</option>
+        <option value="1" {% if activo_filtro == '1' %}selected{% endif %}>Sí</option>
+        <option value="0" {% if activo_filtro == '0' %}selected{% endif %}>No</option>
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <input type="date" class="form-control form-control-sm" name="fecha_desde" value="{{ fecha_desde }}" aria-label="Fecha desde">
+    </div>
+    <div class="col-6 col-md-2">
+      <input type="date" class="form-control form-control-sm" name="fecha_hasta" value="{{ fecha_hasta }}" aria-label="Fecha hasta">
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-funnel"></i> Filtrar</button>
+      <a href="?" class="btn btn-sm btn-outline-secondary" aria-label="Limpiar filtros">Limpiar</a>
+    </div>
+  </form>
+
+  <div id="procesosTable" data-endpoint="{% url 'procesos_list' %}">
+    {% include 'archivos/partials/_procesos_table.html' %}
+  </div>
 </div>
+{% endblock %}
+{% block extra_js %}
+<script>
+(function(){
+  const form=document.getElementById('procesosFilters');
+  const tableWrap=document.getElementById('procesosTable');
+  let timer=null;
+  function fetchData(){
+    const params=new URLSearchParams(new FormData(form));
+    params.set('partial','1');
+    const url=tableWrap.dataset.endpoint+'?'+params.toString();
+    tableWrap.classList.add('opacity-50');
+    fetch(url,{headers:{'X-Requested-With':'XMLHttpRequest'}})
+      .then(r=>r.text())
+      .then(html=>{tableWrap.innerHTML=html;tableWrap.classList.remove('opacity-50');attachPagination();})
+      .catch(()=>tableWrap.classList.remove('opacity-50'));
+  }
+  function debounce(){clearTimeout(timer);timer=setTimeout(fetchData,350);} // búsqueda incremental
+  form.querySelectorAll('input[name=q]').forEach(inp=>inp.addEventListener('input',debounce));
+  form.querySelectorAll('select,input[type=date]').forEach(el=>el.addEventListener('change',fetchData));
+  function attachPagination(){
+    tableWrap.querySelectorAll('a.page-link').forEach(a=>{
+      a.addEventListener('click',function(ev){
+        if(a.getAttribute('href').startsWith('?')){ev.preventDefault();
+          const params=new URLSearchParams(new FormData(form));
+          params.set('page',a.dataset.page);
+          params.set('partial','1');
+          fetch(tableWrap.dataset.endpoint+'?'+params.toString(),{headers:{'X-Requested-With':'XMLHttpRequest'}})
+            .then(r=>r.text()).then(html=>{tableWrap.innerHTML=html;attachPagination();});
+        }
+      });
+    });
+  }
+  attachPagination();
+})();
+</script>
 {% endblock %}

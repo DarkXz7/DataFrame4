@@ -1969,8 +1969,117 @@ def _normalizar_celda(valor):
 
 
 def procesos_list(request):
-    procesos = ProcessConfig.objects.filter(activo=True).order_by('-actualizado')
-    return render(request, 'archivos/procesos_list.html', {'procesos': procesos})
+    """Listado de configuraciones de procesos guardados con filtros y paginación.
+    Filtros soportados (via query params): q (búsqueda en nombre), activo (1/0), fecha_desde, fecha_hasta.
+    """
+    from django.core.paginator import Paginator
+    from django.db.models import Count, Q
+
+    qs = ProcessConfig.objects.all().annotate(total_runs=Count('runs')).order_by('-actualizado')
+
+    q = request.GET.get('q', '').strip()
+    if q:
+        qs = qs.filter(Q(nombre__icontains=q) | Q(descripcion__icontains=q))
+
+    activo = request.GET.get('activo')
+    if activo in ('0','1'):
+        qs = qs.filter(activo=(activo == '1'))
+
+    fecha_desde = request.GET.get('fecha_desde')
+    fecha_hasta = request.GET.get('fecha_hasta')
+    if fecha_desde:
+        try:
+            from datetime import datetime
+            fd = datetime.strptime(fecha_desde, '%Y-%m-%d')
+            qs = qs.filter(creado__date__gte=fd.date())
+        except ValueError:
+            messages.warning(request, 'Fecha desde inválida, use YYYY-MM-DD')
+    if fecha_hasta:
+        try:
+            from datetime import datetime
+            fh = datetime.strptime(fecha_hasta, '%Y-%m-%d')
+            qs = qs.filter(creado__date__lte=fh.date())
+        except ValueError:
+            messages.warning(request, 'Fecha hasta inválida, use YYYY-MM-DD')
+
+    page_number = request.GET.get('page', 1)
+    paginator = Paginator(qs, 10)
+    page_obj = paginator.get_page(page_number)
+
+    # Respuesta parcial para búsqueda incremental (solo tabla)
+    if request.headers.get('x-requested-with') == 'XMLHttpRequest' and request.GET.get('partial') == '1':
+        return render(request, 'archivos/partials/_procesos_table.html', {
+            'page_obj': page_obj,
+            'paginator': paginator,
+            'is_partial': True
+        })
+
+    return render(request, 'archivos/procesos_list.html', {
+        'page_obj': page_obj,
+        'paginator': paginator,
+        'q': q,
+        'activo_filtro': activo,
+        'fecha_desde': fecha_desde,
+        'fecha_hasta': fecha_hasta
+    })
+
+
+def procesos_runs_list(request):
+    """Listado de ejecuciones (ProcessAutomation) con filtros (usuario, estado, fecha) y paginación."""
+    from django.core.paginator import Paginator
+    from django.db.models import Q
+    from .db_models import ProcessAutomation
+    runs = ProcessAutomation.objects.all().order_by('-fecha_ejecucion')
+
+    usuario = request.GET.get('usuario','').strip()
+    estado = request.GET.get('estado','').strip()
+    q = request.GET.get('q','').strip()
+    fecha_desde = request.GET.get('fecha_desde')
+    fecha_hasta = request.GET.get('fecha_hasta')
+
+    if usuario:
+        runs = runs.filter(usuario__icontains=usuario)
+    if estado:
+        runs = runs.filter(estado__icontains=estado)
+    if q:
+        runs = runs.filter(Q(nombre__icontains=q) | Q(resultado__icontains=q) | Q(error_mensaje__icontains=q))
+    from datetime import datetime
+    if fecha_desde:
+        try:
+            fd = datetime.strptime(fecha_desde, '%Y-%m-%d')
+            runs = runs.filter(fecha_ejecucion__date__gte=fd.date())
+        except ValueError:
+            messages.warning(request, 'Fecha desde inválida (YYYY-MM-DD)')
+    if fecha_hasta:
+        try:
+            fh = datetime.strptime(fecha_hasta, '%Y-%m-%d')
+            runs = runs.filter(fecha_ejecucion__date__lte=fh.date())
+        except ValueError:
+            messages.warning(request, 'Fecha hasta inválida (YYYY-MM-DD)')
+
+    paginator = Paginator(runs, 15)
+    page_obj = paginator.get_page(request.GET.get('page', 1))
+
+    if request.headers.get('x-requested-with') == 'XMLHttpRequest' and request.GET.get('partial') == '1':
+        return render(request, 'archivos/partials/_runs_table.html', {
+            'page_obj': page_obj,
+            'is_partial': True
+        })
+
+    # Valores únicos para combos
+    usuarios_distintos = ProcessAutomation.objects.order_by().values_list('usuario', flat=True).distinct()[:100]
+    estados_distintos = ProcessAutomation.objects.order_by().values_list('estado', flat=True).distinct()[:50]
+
+    return render(request, 'archivos/procesos_runs_list.html', {
+        'page_obj': page_obj,
+        'usuario': usuario,
+        'estado': estado,
+        'q': q,
+        'fecha_desde': fecha_desde,
+        'fecha_hasta': fecha_hasta,
+        'usuarios_distintos': usuarios_distintos,
+        'estados_distintos': estados_distintos
+    })
 
 
 def eliminar_carpeta(request, carpeta_id):
