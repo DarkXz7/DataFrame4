@@ -569,130 +569,24 @@ def guardar_archivo_local(request):
                 df.to_excel(ruta_destino, index=False)
             elif archivo_temp['tipo'].lower() == 'csv':
                 df.to_csv(ruta_destino, index=False)
-            elif archivo_temp['tipo'].lower() == 'txt':
-                # Guardar como texto plano (tabulado)
-                df.to_csv(ruta_destino, index=False, sep='\t')
+            # Nota: tipos específicos como 'sql_script' no aplican en guardar_archivo_local
             else:
-                # Por defecto, guardar como CSV
+                # Por defecto CSV
                 df.to_csv(ruta_destino, index=False)
-            
-            # Limpiar sesión
+
+            # Limpiar sesión tras guardar
             del request.session['archivo_temporal']
             del request.session['archivo_datos']
-            
-            
+
             messages.success(request, f"¡Archivo '{archivo_temp['nombre']}' guardado exitosamente!")
             return render(request, "archivos/exito.html", {
                 "archivo": archivo_guardado,
                 "mensaje": "Archivo guardado exitosamente"
             })
-            
         except Exception as e:
             messages.error(request, f"Error al guardar el archivo: {str(e)}")
             return redirect('subir_archivo_local')
-    
     return redirect('subir_archivo_local')
-
-# ========== SECCIÓN: CARPETAS COMPARTIDAS ==========
-
-def listar_carpetas_compartidas(request):
-    """Lista todas las carpetas compartidas disponibles"""
-    carpetas = CarpetaCompartida.objects.filter(activa=True)
-    
-    # Verificar accesibilidad de cada carpeta
-    for carpeta in carpetas:
-        carpeta.accesible = carpeta.existe()
-    
-    return render(request, 'archivos/listar_carpetas.html', {
-        'carpetas': carpetas
-    })
-    
-#Gestionar carpetas compartidas 
-def gestionar_carpetas(request):
-    """Vista para gestionar carpetas compartidas"""
-    if request.method == 'POST':
-        form = CarpetaCompartidaForm(request.POST)
-        if form.is_valid():
-            carpeta = form.save()
-            messages.success(request, f'Carpeta "{carpeta.nombre}" agregada exitosamente')
-            return redirect('gestionar_carpetas')
-    else:
-        form = CarpetaCompartidaForm()
-    
-    carpetas = CarpetaCompartida.objects.all().order_by('-fecha_creacion')
-    return render(request, 'archivos/gestionar_carpetas.html', {
-        'form': form,
-        'carpetas': carpetas
-    })
-    
-    
-def eliminar_carpeta(request, carpeta_id):
-    carpeta = get_object_or_404(CarpetaCompartida, id=carpeta_id)
-    if request.method == 'POST':
-        carpeta.delete()
-        messages.success(request, f'Carpeta "{carpeta.nombre}" eliminada correctamente.')
-        return redirect('index')
-    return render(request, 'archivos/confirmar_eliminar_carpeta.html', {'carpeta': carpeta})
-
-def listar_archivos(request, carpeta_id):
-    """Lista archivos en una carpeta compartida - VERSIÓN SIMPLE"""
-    carpeta = get_object_or_404(CarpetaCompartida, id=carpeta_id)
-    
-    # Verificar si la carpeta es accesible
-    carpeta_accesible = os.path.exists(carpeta.ruta) and os.path.isdir(carpeta.ruta)
-    
-    archivos_detectados = []
-    total_archivos = 0
-    tipos_archivo = {}
-    
-    if carpeta_accesible:
-        try:
-            # Buscar archivos en la carpeta
-            for archivo_nombre in os.listdir(carpeta.ruta):
-                archivo_path = os.path.join(carpeta.ruta, archivo_nombre)
-                
-                if os.path.isfile(archivo_path):
-                    # Solo archivos Excel, CSV y TXT
-                    if archivo_nombre.lower().endswith(('.xlsx', '.xls', '.csv', '.txt')):
-                        
-                        # Determinar tipo
-                        if archivo_nombre.lower().endswith(('.xlsx', '.xls')):
-                            tipo = 'excel'
-                        elif archivo_nombre.lower().endswith('.csv'):
-                            tipo = 'csv'
-                        else:
-                            tipo = 'txt'
-                        
-                        # Crear o obtener registro del archivo
-                        archivo_obj, created = ArchivoDetectado.objects.get_or_create(
-                            ruta_completa=archivo_path,
-                            defaults={
-                                'nombre': archivo_nombre,
-                                'carpeta': carpeta,
-                                'tipo': tipo,
-                                'tamaño': os.path.getsize(archivo_path),
-                                'fecha_modificacion': datetime.fromtimestamp(os.path.getmtime(archivo_path))
-                            }
-                        )
-                        
-                        archivos_detectados.append(archivo_obj)
-                        tipos_archivo[tipo] = tipos_archivo.get(tipo, 0) + 1
-            
-            total_archivos = len(archivos_detectados)
-            
-        except Exception as e:
-            messages.error(request, f'Error al leer la carpeta: {str(e)}')
-            carpeta_accesible = False
-    
-    context = {
-        'carpeta': carpeta,
-        'archivos': archivos_detectados,
-        'carpeta_accesible': carpeta_accesible,
-        'total_archivos': total_archivos,
-        'tipos_archivo': tipos_archivo,
-    }
-    
-    return render(request, 'archivos/listar_archivos.html', context)
 
 def detalle_archivo(request, archivo_id):
     """Muestra los detalles de un archivo específico"""
@@ -909,7 +803,6 @@ def subir_desde_sqlserver(request):
         else:
             # Falló la conexión
             messages.error(request, f"Error conectando a SQL Server: {message}")
-            
             # Sugerir soluciones basadas en el mensaje de error
             if "10061" in message:
                 # Error de conexión rechazada
@@ -920,16 +813,6 @@ def subir_desde_sqlserver(request):
                     <li>En SQL Server Configuration Manager, activa TCP/IP en Protocolos</li>
                     <li>Reinicia el servicio SQL Server después de activar TCP/IP</li>
                     <li>Asegúrate que el firewall permita conexiones al puerto 1433</li>
-                    <li>Verifica que estás usando el nombre de instancia correcto (SQLEXPRESS)</li>
-                </ul>
-                """
-            elif "Login failed" in message or "inicio de sesión" in message.lower():
-                # Error de autenticación
-                solucion = """
-                <p><strong>Error de autenticación</strong>: Credenciales incorrectas</p>
-                <ul>
-                    <li>Verifica que el usuario y contraseña sean correctos en settings.py</li>
-                    <li>Ejecuta <code>verificar_sqlexpress.py</code> para probar autenticación</li>
                     <li>Prueba usar autenticación de Windows (Trusted_Connection=yes)</li>
                     <li>Ejecuta <code>configurar_base_datos.py</code> para crear el usuario</li>
                 </ul>
@@ -1104,82 +987,37 @@ def subir_sql(request):
                     sql_upload.estado = 'Error'
                     sql_upload.sentencias_total = resultados['total']
                     sql_upload.sentencias_exito = resultados['success']
-                    sql_upload.errores = json.dumps([{
-                        'error': e['error'],
-                        'statement': e['statement'][:200],  # Limitamos la longitud
-                        'tipo': e.get('tipo', 'desconocido')
-                    } for e in resultados['errors'][:20]])  # Limitamos a 20 errores
-                    
-                    if resultados['tables_created']:
-                        sql_upload.tablas_creadas = json.dumps(resultados['tables_created'])
-                    
+                    sql_upload.errores = json.dumps([
+                        {
+                            'error': e['error'],
+                            'statement': e['statement'][:200]  # Limitamos la longitud
+                        } for e in resultados['errors'][:20]
+                    ])
+                else:
+                    # Éxito
+                    messages.success(request, f"Archivo SQL ejecutado correctamente: {resultados['success']} sentencias OK")
+                    sql_upload.estado = 'Completado'
+                    sql_upload.sentencias_total = resultados['total']
+                    sql_upload.sentencias_exito = resultados['success']
                     sql_upload.save()
-                    
-                    # Actualizar registro de proceso con el fallo
-                    process_record.estado = 'Error'
+                    process_record.estado = 'Completado'
                     process_record.tiempo_ejecucion = tiempo_ejecucion
-                    process_record.filas_afectadas = resultados['success']
-                    process_record.error_mensaje = f"Error en SQL: {error_summary}. {error_msg}"
+                    process_record.filas_afectadas = resultados.get('rows_affected', 0)
                     process_record.resultado = json.dumps({
-                        'sentencias_totales': resultados['total'],
-                        'sentencias_exitosas': resultados['success'],
-                        'errores_totales': len(resultados['errors']),
-                        'tablas_afectadas': resultados['tables_created'] if 'tables_created' in resultados else []
+                        'sentencias_total': resultados['total'],
+                        'sentencias_exito': resultados['success'],
+                        'errores': len(resultados['errors'])
                     })
                     process_record.save()
-                    
+                    # Limpiar archivo temporal
+                    try:
+                        if os.path.exists(ruta_temporal):
+                            os.remove(ruta_temporal)
+                    except Exception:
+                        pass
                     return redirect('subir_sql')
-                  # CASO DE ÉXITO - No hay errores
-                
-                # Actualizar registro en SqlFileUpload
-                sql_upload.estado = 'Completado'
-                sql_upload.sentencias_total = resultados['total']
-                sql_upload.sentencias_exito = resultados['success']
-                
-                if 'tables_created' in resultados and resultados['tables_created']:
-                    sql_upload.tablas_creadas = json.dumps(resultados['tables_created'])
-                
-                sql_upload.save()
-                
-                # Actualizar registro de proceso en ProcessAutomation
-                process_record.estado = 'Completado'
-                process_record.tiempo_ejecucion = tiempo_ejecucion
-                process_record.filas_afectadas = resultados['success']
-                process_record.resultado = json.dumps({
-                    'sentencias_totales': resultados['total'],
-                    'sentencias_exitosas': resultados['success'],
-                    'tablas_afectadas': resultados['tables_created'] if 'tables_created' in resultados else []
-                })
-                process_record.save()
-                
-                # Guardar tablas creadas en la sesión
-                if resultados['tables_created']:
-                    request.session['created_tables'] = resultados['tables_created']
-                else:
-                    # Si no detectamos tablas creadas específicamente, obtener todas las tablas
-                    tablas_query = """
-                    SELECT TABLE_NAME 
-                    FROM INFORMATION_SCHEMA.TABLES 
-                    WHERE TABLE_TYPE = 'BASE TABLE' 
-                    AND TABLE_CATALOG = DB_NAME()
-                    """
-                    tablas = pd.read_sql(tablas_query, engine)['TABLE_NAME'].tolist()
-                    request.session['created_tables'] = tablas
-                
-                request.session['source_type'] = 'sql'
-                request.session['wizard_step'] = 2
-                
-                # Mensaje de éxito                messages.success(request, f"Archivo SQL importado correctamente. {resultados['success']} sentencias ejecutadas.")
-                if resultados['tables_created']:
-                    messages.info(request, f"Tablas creadas: {', '.join(resultados['tables_created'][:5])}" + 
-                               ("... y más" if len(resultados['tables_created']) > 5 else ""))
-                return redirect('seleccionar_datos')
-                
             except Exception as e:
-                # Calcular tiempo de ejecución hasta el error
-                tiempo_ejecucion = int(time.time() - tiempo_inicio)
-                
-                # Registrar el error en logs
+                import traceback
                 logger.exception("Error en subir_sql")
                 error_detalle = traceback.format_exc()
                 
@@ -1756,6 +1594,46 @@ def seleccionar_datos(request):
 
             errores = []
             total_filas = 0
+            # Registro inicial en SqlFileUpload / ProcessAutomation
+            from .db_models import SqlFileUpload, ProcessAutomation
+            from django.utils import timezone
+            import json as _json
+            try:
+                nombre_archivo_sql = nombre_archivo if modo == 'compartido' else (archivo.name if 'archivo' in locals() and archivo else 'script.sql')
+                sentencias_detectadas = len([b for b in script.split(';') if b.strip()])
+                conversion_flag = ('`' in script or 'ENGINE=' in script)
+                tamanio_bytes = os.path.getsize(archivo_path) if os.path.exists(archivo_path) else len(script.encode('utf-8'))
+                sql_upload = SqlFileUpload(
+                    nombre_archivo=nombre_archivo_sql,
+                    tamanio_bytes=tamanio_bytes,
+                    usuario=request.user.username if request.user.is_authenticated else 'usuario_anónimo',
+                    tablas_creadas=_json.dumps(tablas) if tablas else None,
+                    sentencias_total=sentencias_detectadas,
+                    sentencias_exito=0,
+                    conversion_mysql=conversion_flag,
+                    estado='Procesando',
+                    ruta_temporal=archivo_path
+                )
+                sql_upload.save()
+                process_record = ProcessAutomation(
+                    nombre=f"Importación SQL (web): {nombre_archivo_sql}",
+                    tipo_proceso="Importación SQL",
+                    estado="En proceso",
+                    tiempo_ejecucion=0,
+                    usuario=request.user.username if request.user.is_authenticated else 'usuario_anónimo',
+                    parametros=_json.dumps({
+                        'nombre_archivo': nombre_archivo_sql,
+                        'tamanio_bytes': tamanio_bytes,
+                        'conversion_requerida': conversion_flag,
+                        'tablas_detectadas': tablas
+                    }),
+                    filas_afectadas=0
+                )
+                process_record.save()
+            except Exception as _reg_err:
+                sql_upload = None
+                process_record = None
+                messages.warning(request, f"No se pudo registrar la subida inicial: {_reg_err}")
             try:
                 bloques = [b.strip() for b in script.split(';') if b.strip()]
                 with engine.begin() as conn:
@@ -1765,20 +1643,52 @@ def seleccionar_datos(request):
                         except Exception as e:
                             errores.append({'stmt': stmt[:60], 'error': str(e)})
                             messages.warning(request, f"Error al ejecutar: {e}")
-
-                # Contar filas usando una conexión explícita (SQLAlchemy 2.x)                with engine.connect() as conn:
-                    for t in tablas:
-                        try:
-                            result = conn.execute(text(f"SELECT COUNT(*) FROM [{t}]"))
-                            filas = result.scalar() or 0
-                            total_filas += filas
-                            messages.info(request, f"Tabla '{t}': {filas} filas")
-                        except Exception as e:
-                            messages.warning(request, f"Error leyendo '{t}': {e}")
+                # Intentar contar filas por tabla creada
+                if tablas:
+                    with engine.connect() as count_conn:
+                        for t in tablas:
+                            try:
+                                result = count_conn.execute(text(f"SELECT COUNT(*) FROM [{t}]"))
+                                filas = result.scalar() or 0
+                                total_filas += filas
+                            except Exception:
+                                pass
 
                 messages.success(request, f"Script ejecutado. {len(tablas)} tabla(s), {total_filas} fila(s).")
+                # Actualizar registros si existen
+                try:
+                    if sql_upload:
+                        sql_upload.sentencias_exito = len(bloques) - len(errores)
+                        sql_upload.estado = 'Completado' if not errores else 'Completado_con_errores'
+                        if errores:
+                            sql_upload.errores = _json.dumps(errores[:50])
+                        sql_upload.save()
+                    if process_record:
+                        process_record.estado = 'Completado' if not errores else 'Completado con errores'
+                        process_record.filas_afectadas = total_filas
+                        process_record.resultado = _json.dumps({
+                            'tablas': tablas,
+                            'errores': errores[:20],
+                            'filas_totales': total_filas,
+                            'sentencias_totales': len(bloques),
+                            'sentencias_exito': len(bloques) - len(errores)
+                        })
+                        process_record.save()
+                except Exception:
+                    pass
             except Exception as e:
                 messages.error(request, f"Error global ejecutando script: {e}")
+                try:
+                    if sql_upload:
+                        sql_upload.estado = 'Error'
+                        sql_upload.errores = _json.dumps({'error': str(e)})
+                        sql_upload.save()
+                    if process_record:
+                        process_record.estado = 'Error'
+                        process_record.error_mensaje = str(e)
+                        process_record.save()
+                except Exception:
+                    pass
 
             if request.POST.get('guardar_proceso'):
                 import time
@@ -2018,6 +1928,85 @@ def procesos_list(request):
     return render(request, 'archivos/procesos_list.html', {'procesos': procesos})
 
 
+def eliminar_carpeta(request, carpeta_id):
+    """Eliminar una carpeta compartida (confirmación vía POST)."""
+    from .models import CarpetaCompartida
+    carpeta = get_object_or_404(CarpetaCompartida, id=carpeta_id)
+    if request.method == 'POST':
+        nombre = carpeta.nombre
+        carpeta.delete()
+        messages.success(request, f'Carpeta "{nombre}" eliminada correctamente.')
+        return redirect('index')
+    return render(request, 'archivos/confirmar_eliminar_carpeta.html', {'carpeta': carpeta})
+
+def listar_carpetas_compartidas(request):
+    """Lista todas las carpetas compartidas activas y su accesibilidad."""
+    from .models import CarpetaCompartida
+    carpetas = CarpetaCompartida.objects.filter(activa=True)
+    for carpeta in carpetas:
+        try:
+            carpeta.accesible = carpeta.existe()
+        except Exception:
+            carpeta.accesible = False
+    return render(request, 'archivos/listar_carpetas.html', {'carpetas': carpetas})
+
+def gestionar_carpetas(request):
+    """Formulario para crear y listar carpetas compartidas."""
+    from .models import CarpetaCompartida
+    if request.method == 'POST':
+        form = CarpetaCompartidaForm(request.POST)
+        if form.is_valid():
+            carpeta = form.save()
+            messages.success(request, f'Carpeta "{carpeta.nombre}" agregada exitosamente')
+            return redirect('gestionar_carpetas')
+    else:
+        form = CarpetaCompartidaForm()
+    carpetas = CarpetaCompartida.objects.all().order_by('-fecha_creacion')
+    return render(request, 'archivos/gestionar_carpetas.html', {'form': form, 'carpetas': carpetas})
+
+def listar_archivos(request, carpeta_id):
+    """Lista archivos (excel/csv/txt) en una carpeta compartida."""
+    from .models import CarpetaCompartida, ArchivoDetectado
+    from datetime import datetime
+    carpeta = get_object_or_404(CarpetaCompartida, id=carpeta_id)
+    carpeta_accesible = os.path.exists(carpeta.ruta) and os.path.isdir(carpeta.ruta)
+    archivos_detectados = []
+    tipos_archivo = {}
+    if carpeta_accesible:
+        try:
+            for archivo_nombre in os.listdir(carpeta.ruta):
+                archivo_path = os.path.join(carpeta.ruta, archivo_nombre)
+                if os.path.isfile(archivo_path) and archivo_nombre.lower().endswith(('.xlsx', '.xls', '.csv', '.txt')):
+                    if archivo_nombre.lower().endswith(('.xlsx', '.xls')):
+                        tipo = 'excel'
+                    elif archivo_nombre.lower().endswith('.csv'):
+                        tipo = 'csv'
+                    else:
+                        tipo = 'txt'
+                    archivo_obj, _created = ArchivoDetectado.objects.get_or_create(
+                        ruta_completa=archivo_path,
+                        defaults={
+                            'nombre': archivo_nombre,
+                            'carpeta': carpeta,
+                            'tipo': tipo,
+                            'tamaño': os.path.getsize(archivo_path),
+                            'fecha_modificacion': datetime.fromtimestamp(os.path.getmtime(archivo_path))
+                        }
+                    )
+                    archivos_detectados.append(archivo_obj)
+                    tipos_archivo[tipo] = tipos_archivo.get(tipo, 0) + 1
+        except Exception as e:
+            messages.error(request, f'Error al leer la carpeta: {e}')
+            carpeta_accesible = False
+    context = {
+        'carpeta': carpeta,
+        'archivos': archivos_detectados,
+        'carpeta_accesible': carpeta_accesible,
+        'total_archivos': len(archivos_detectados),
+        'tipos_archivo': tipos_archivo,
+    }
+    return render(request, 'archivos/listar_archivos.html', context)
+
 
 def ejecutar_proceso(request, proceso_id):
     proceso = get_object_or_404(ProcessConfig, id=proceso_id, activo=True)
@@ -2044,14 +2033,14 @@ def ejecutar_proceso(request, proceso_id):
             # ...existing code para excel/csv...
             pass  # (deja tu implementación previa)
         elif origen['tipo'] == 'sql_script':
-            # 1. Cargar script (contenido inline o archivo)
+            # Cargar script inline o desde archivo definido en configuracion
             sql_text = origen.get('contenido')
             if not sql_text:
                 ruta_base = origen.get('ruta_base') or ''
-                archivo = origen.get('archivo')
-                if not archivo:
-                    raise ValueError("Script SQL no definido.")
-                script_path = os.path.join(ruta_base, archivo) if ruta_base else archivo
+                archivo_script = origen.get('archivo')
+                if not archivo_script:
+                    raise ValueError("Script SQL no definido en configuración.")
+                script_path = os.path.join(ruta_base, archivo_script) if ruta_base else archivo_script
                 with open(script_path, 'r', encoding='utf-8') as f:
                     sql_text = f.read()
             bloques = [b.strip() for b in sql_text.split(';') if b.strip()]
@@ -2158,8 +2147,7 @@ def preview_sql_conversion(request):
                 'medio': 'El script tiene algunos problemas de compatibilidad que pueden requerir ajustes manuales.',
                 'bajo': 'El script tiene problemas graves de compatibilidad que requerirán intervención manual.'
             }
-            
-            # Crear respuesta para el cliente
+            # Crear respuesta para el cliente (limpio de duplicados rotos)
             respuesta = {
                 'success': True,
                 'sql_original': sql_original_truncado,
@@ -2185,61 +2173,4 @@ def preview_sql_conversion(request):
                 'error': str(e)
             }, status=400)
     
-    return JsonResponse({
-        'success': False,
-        'error': 'Método no permitido o archivo no proporcionado'
-    }, status=400)
-    """
-    Vista AJAX para previsualizar la conversión de SQL de MySQL a SQL Server
-    sin ejecutar el script.
-    """
-    from django.http import JsonResponse
-    from .mysql_to_sqlserver import convert_mysql_to_sqlserver
-    import json
-    
-    if request.method == 'POST' and request.FILES.get('archivo_sql'):
-        try:
-            archivo_sql = request.FILES['archivo_sql']
-            archivo_sql.seek(0)
-            sql_original = archivo_sql.read().decode('utf-8', errors='ignore')
-            
-            # Convertir SQL de MySQL a formato SQL Server
-            sql_convertido = convert_mysql_to_sqlserver(sql_original)
-            
-            # Limitar tamaño para respuesta AJAX
-            max_length = 50000  # Caracteres máximos para evitar respuestas muy grandes
-            sql_original_truncado = sql_original[:max_length] + ("..." if len(sql_original) > max_length else "")
-            sql_convertido_truncado = sql_convertido[:max_length] + ("..." if len(sql_convertido) > max_length else "")
-            
-            # Generar resumen de cambios realizados
-            cambios = []
-            if '`' in sql_original:
-                cambios.append("Reemplazo de comillas invertidas (`) por corchetes ([]) para identificadores")
-            if 'AUTO_INCREMENT' in sql_original:
-                cambios.append("Conversión de AUTO_INCREMENT a IDENTITY(1,1)")
-            if 'ENGINE=' in sql_original:
-                cambios.append("Eliminación de especificaciones de motor (ENGINE=InnoDB)")
-            if 'int(' in sql_original:
-                cambios.append("Ajuste de tipos de datos (int(N) → int)")
-            if 'varchar(' in sql_original:
-                cambios.append("Conversión de varchar a nvarchar para soporte Unicode")
-            if 'START TRANSACTION' in sql_original:
-                cambios.append("Ajuste de sintaxis de transacciones (START TRANSACTION → BEGIN TRANSACTION)")
-            
-            return JsonResponse({
-                'success': True,
-                'sql_original': sql_original_truncado,
-                'sql_convertido': sql_convertido_truncado,
-                'cambios': cambios
-            })
-            
-        except Exception as e:
-            return JsonResponse({
-                'success': False,
-                'error': str(e)
-            }, status=400)
-    
-    return JsonResponse({
-        'success': False,
-        'error': 'Método no permitido o archivo no proporcionado'
-    }, status=400)
+    return JsonResponse({'success': False, 'error': 'Método no permitido o archivo no proporcionado'}, status=400)
