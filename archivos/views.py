@@ -1594,6 +1594,20 @@ def seleccionar_datos(request):
 
             errores = []
             total_filas = 0
+            # Pre-scan tablas existentes para poder decidir si habrá cambios
+            tablas_existentes = set()
+            if tablas:
+                try:
+                    with engine.connect() as _chk_conn:
+                        for _t in tablas:
+                            try:
+                                res = _chk_conn.execute(text("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = :t AND TABLE_CATALOG = DB_NAME()"), {"t": _t})
+                                if res.scalar():
+                                    tablas_existentes.add(_t)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
             # Registro inicial en SqlFileUpload / ProcessAutomation
             from .db_models import SqlFileUpload, ProcessAutomation
             from django.utils import timezone
@@ -1636,46 +1650,76 @@ def seleccionar_datos(request):
                 messages.warning(request, f"No se pudo registrar la subida inicial: {_reg_err}")
             try:
                 bloques = [b.strip() for b in script.split(';') if b.strip()]
-                with engine.begin() as conn:
-                    for stmt in bloques:
-                        try:
-                            conn.execute(text(stmt))
-                        except Exception as e:
-                            errores.append({'stmt': stmt[:60], 'error': str(e)})
-                            messages.warning(request, f"Error al ejecutar: {e}")
-                # Intentar contar filas por tabla creada
-                if tablas:
-                    with engine.connect() as count_conn:
-                        for t in tablas:
-                            try:
-                                result = count_conn.execute(text(f"SELECT COUNT(*) FROM [{t}]"))
-                                filas = result.scalar() or 0
-                                total_filas += filas
-                            except Exception:
-                                pass
-
-                messages.success(request, f"Script ejecutado. {len(tablas)} tabla(s), {total_filas} fila(s).")
-                # Actualizar registros si existen
-                try:
+                # Caso: todas las tablas ya existen y no queremos rehacer nada -> Guardado_sin_cambios
+                if tablas and len(tablas_existentes) == len(tablas):
+                    estado_final = 'Guardado_sin_cambios'
+                    messages.info(request, f"Todas las tablas ({len(tablas)}) ya existían. No se aplicaron cambios.")
                     if sql_upload:
-                        sql_upload.sentencias_exito = len(bloques) - len(errores)
-                        sql_upload.estado = 'Completado' if not errores else 'Completado_con_errores'
-                        if errores:
-                            sql_upload.errores = _json.dumps(errores[:50])
+                        sql_upload.estado = estado_final
+                        sql_upload.sentencias_exito = 0
                         sql_upload.save()
                     if process_record:
-                        process_record.estado = 'Completado' if not errores else 'Completado con errores'
-                        process_record.filas_afectadas = total_filas
-                        process_record.resultado = _json.dumps({
-                            'tablas': tablas,
-                            'errores': errores[:20],
-                            'filas_totales': total_filas,
-                            'sentencias_totales': len(bloques),
-                            'sentencias_exito': len(bloques) - len(errores)
-                        })
+                        process_record.estado = 'Guardado sin cambios'
+                        process_record.resultado = _json.dumps({'tablas': tablas, 'sin_cambios': True})
                         process_record.save()
-                except Exception:
-                    pass
+                else:
+                    # Ejecutar normalmente solo si hay potencial de crear algo nuevo
+                    with engine.begin() as conn:
+                        for stmt in bloques:
+                            try:
+                                conn.execute(text(stmt))
+                            except Exception as e:
+                                # Detectar error benigno de existencia y tratarlo como skip
+                                msg_err = str(e)
+                                if 'already exists' in msg_err.lower() or 'ya existe' in msg_err.lower():
+                                    errores.append({'stmt': stmt[:60], 'error': 'EXISTS_SKIP'})
+                                else:
+                                    errores.append({'stmt': stmt[:60], 'error': msg_err})
+                                    messages.warning(request, f"Error al ejecutar: {msg_err}")
+                    if tablas:
+                        with engine.connect() as count_conn:
+                            for t in tablas:
+                                try:
+                                    result = count_conn.execute(text(f"SELECT COUNT(*) FROM [{t}]"))
+                                    filas = result.scalar() or 0
+                                    total_filas += filas
+                                except Exception:
+                                    pass
+                    mensajes_estado = []
+                    skips = sum(1 for e in errores if e['error'] == 'EXISTS_SKIP')
+                    reales = [e for e in errores if e['error'] != 'EXISTS_SKIP']
+                    if skips and not reales:
+                        estado_final = 'Guardado_sin_cambios'
+                        mensajes_estado.append(f"{skips} sentencias omitidas por existencia previa.")
+                    elif reales:
+                        estado_final = 'Parcial'
+                        mensajes_estado.append(f"{len(reales)} errores reales.")
+                    else:
+                        estado_final = 'Completado'
+                    messages.success(request, f"Script ejecutado. {len(tablas)} tabla(s), {total_filas} fila(s). {' '.join(mensajes_estado)}")
+                    if sql_upload:
+                        sql_upload.sentencias_exito = len(bloques) - len(reales)
+                        sql_upload.estado = estado_final
+                        if reales:
+                            sql_upload.errores = _json.dumps(reales[:50])
+                        else:
+                            sql_upload.errores = 'Sin errores'
+                        sql_upload.save()
+                    if process_record:
+                        process_record.estado = estado_final.replace('_', ' ')
+                        process_record.filas_afectadas = total_filas
+                        if reales:
+                            process_record.resultado = _json.dumps({
+                                'tablas': tablas,
+                                'errores_reales': reales[:20],
+                                'skips_existencia': skips,
+                                'filas_totales': total_filas,
+                                'sentencias_totales': len(bloques),
+                                'sentencias_exito': len(bloques) - len(reales)
+                            })
+                        else:
+                            process_record.resultado = 'Sin errores'
+                        process_record.save()
             except Exception as e:
                 messages.error(request, f"Error global ejecutando script: {e}")
                 try:
